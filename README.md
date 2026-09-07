@@ -260,12 +260,13 @@ python main.py
 - **curl_cffi**: 带浏览器 TLS 指纹模拟的 HTTP 客户端
 
 ### 调试工具
-- **[camoufox-reverse MCP](https://github.com/WhiteNightShadow/camoufox-reverse-mcp) v1.5.0**: 反检测浏览器逆向分析（统一 API，含主世界/Frame Hook、源码级插桩、Cookie 归因与可选 Gecko 原生属性追踪）
+- **[camoufox-reverse MCP](https://github.com/WhiteNightShadow/camoufox-reverse-mcp) v1.5.1**: 反检测浏览器逆向分析（统一 API，含主世界/Frame Hook、源码级插桩、Cookie 归因与可选 Gecko 原生属性追踪）
 
 ## 版本记录
 
 | 版本 | 日期 | 要点 |
 |------|------|------|
+| v3.6.1 | 2026-09-07 | 对齐 MCP v1.5.1：补充 Trace 清理、未来 Frame 预注册、执行失败不重放和 Hook 卸载边界 |
 | v3.6.0 | 2026-09-04 | 对齐 MCP v1.5.0；新增主世界与 Frame 选择、动态目标持久 Hook、`pending` 状态和 Trace 数据读取规范 |
 | v3.5.1 | 2026-09-03 | 对齐 MCP v1.4.1 / Camoufox Reverse reverse.5；LocalStorage 覆盖迁移至 Firefox 152 LSNG，并纳入可达的 partitioned 分支，protocol 1 不变 |
 | v3.5.0 | 2026-09-03 | 对齐 MCP v1.4.0 / Camoufox Reverse reverse.4；默认保留 sandbox，新增交互式原生追踪、75 点证据边界、安全 snapshot 与 side-by-side 安装规则 |

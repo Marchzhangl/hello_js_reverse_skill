@@ -13,7 +13,7 @@ description: >
   v3.3.0 核心层回归扩容：Phase 1-5 详细动作 + 10 个场景速查 + 经验法则回迁核心层。
   v3.3.1 经验法则精简至 22 条：移除单站点经验，合并 evaluate_js 规则。
   v3.4.1 增加 AST 源码插桩执行健康门禁，区分原始源码解析失败与改写产物执行失败。
-  v3.6.0 对齐 MCP v1.5.0：增加显式主世界、Frame 选择、动态目标持久 Hook 与 Trace 读取约束。
+  v3.6.1 对齐 MCP v1.5.1：显式主世界、Frame 选择、持久 Hook、Trace 清理与卸载边界。
 ---
 
 # ⚠️ 硬约束 Checklist（分析启动前必做，不可跳过）
@@ -643,7 +643,7 @@ Actions:
 
 #### 3.0 环境指纹采集（路径 B 核心突破点）
 
-> v3.6.0 对齐 MCP v1.5.0 与 Camoufox Reverse reverse.5。默认分析路径不启用
+> v3.6.1 对齐 MCP v1.5.1 与 Camoufox Reverse reverse.5。默认分析路径不启用
 > 原生追踪；仅在路径 B 确实需要时显式选择定制版。
 
 ```
@@ -698,6 +698,12 @@ Actions:
   或 `frame_index`；不要只看 `get_console_logs`。主世界对象与函数由页面控制，
   参数/返回值仍按不可信数据处理。捕获数量和缓存均有上限，空结果不能单独证明
   目标函数没有执行。
+- `get_trace_data(clear=True)` 只清理数据，不代表卸载 Hook。持久 Hook 可针对尚未创建的
+  Frame 预注册，`pending_reason="frame_not_found"` 表示等待该 Frame 出现。
+- 主世界通道在执行前探测，执行失败不自动换通道重放；调用可能已产生副作用，先核对页面状态。
+- `remove_hooks()` 应检查 `status`、`warnings` 和 `requires_relaunch`。锁定属性可能无法原位恢复，
+  已注册初始化脚本也无法从现有 BrowserContext 注销；要求彻底移除时关闭并重新启动浏览器。
+  Attach 模式仅重连 MCP 不会销毁外部浏览器，应实际重建外部 BrowserContext 或浏览器。
 
 **证据边界（不可省略）**：
 
@@ -1393,6 +1399,7 @@ verify_signer_offline(
 
 | 版本 | 日期 | 要点 |
 |------|------|------|
+| v3.6.1 | 2026-09-07 | 对齐 MCP v1.5.1：Trace 清理、未来 Frame 预注册、执行失败不重放和 Hook 卸载边界 |
 | v3.6.0 | 2026-09-04 | 对齐 MCP v1.5.0：显式主世界、Frame 选择、动态目标持久 Hook、`pending` 语义与 `get_trace_data` |
 | v3.5.1 | 2026-09-03 | 对齐 MCP v1.4.1 / reverse.5：LocalStorage 迁移到 Firefox 152 LSNG，并覆盖可达的 partitioned 分支；固定覆盖集增至 77 点，protocol 1 不变 |
 | v3.5.0 | 2026-09-03 | 对齐 MCP v1.4.0 / reverse.4：普通任务默认不启用 trace；新增 start→操作→stop 交互窗口、75 点覆盖边界、负证据限制、安全 snapshot 语义与 side-by-side 安装规则 |

@@ -1,10 +1,10 @@
-# MCP v1.5.0 工具索引 + v0.9.0 迁移历史
+# MCP v1.5.1 工具索引 + v0.9.0 迁移历史
 
 > **说明**：当前可调用工具以 SKILL.md 核心层和 MCP 工具自身 docstring 为准；本文后半部分保留 v0.8.x → v0.9.0 的历史迁移映射。
 >
-> **版本**：v3.6.0（MCP v1.5.0）
+> **版本**：v3.6.1（MCP v1.5.1）
 >
-> **当前 MCP 版本**：camoufox-reverse MCP v1.5.0。当前可调用参数以工具 docstring 为准；不要从历史表推断现行工具。
+> **当前 MCP 版本**：camoufox-reverse MCP v1.5.1。当前可调用参数以工具 docstring 为准；不要从历史表推断现行工具。
 
 ### 主世界、Frame 与函数 Trace（v1.5.0）
 
@@ -15,6 +15,12 @@
   异步挂载；`pending` 只表示持久脚本已注册、当前文档尚未安装 Hook，必要时调整
   `wait_timeout_ms` 或通过 reload/navigation 重试，后续仍需通过 Trace 确认。
 - `get_trace_data` 是函数 Trace 的读取/清理入口，可按 world 与 Frame 过滤。
+- v1.5.1 清空 Trace 后可继续调用目标函数；清理数据不等于卸载 Hook。
+- 持久 Hook 的目标 Frame 尚未创建时也可预注册，返回 `pending_reason="frame_not_found"`。
+- 主世界执行失败不自动换通道重放；先核对调用是否已经产生副作用。
+- `remove_hooks` 返回 `hooks_partially_removed` 或 `requires_relaunch=true` 时，不能当作完整卸载。
+  锁定属性与已注册初始化脚本的彻底移除需要关闭并重新启动浏览器。
+  Attach 模式须实际重建外部 BrowserContext 或浏览器，不能只断开后重连 MCP。
 
 ### 当前原生 PropertyTracer（v1.1+，v1.4 增强）
 
