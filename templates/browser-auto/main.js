@@ -1,3 +1,9 @@
+// Offline test dispatch must precede dependency loading and business work.
+if (process.argv.includes('--test')) {
+    const result = require('node:child_process').spawnSync(process.execPath,
+        [require('node:path').join(__dirname, 'test.js')], {stdio: 'inherit'});
+    process.exitCode = result.status ?? 1;
+} else {
 /**
  * 主脚本模板 - 浏览器自动化
  * 
@@ -7,7 +13,7 @@
  * TODO: 根据逆向分析结果修改配置和逻辑
  */
 
-const { chromium } = require('playwright-core');
+// Browser dependency is loaded only when main() runs.
 
 // ============ 配置区域 ============
 
@@ -41,6 +47,7 @@ const CONFIG = {
 // ============ 主逻辑 ============
 
 async function main() {
+    const { chromium } = require('playwright-core');
     console.log(`[*] 项目：${CONFIG.name}`);
     console.log(`[*] 目标：${CONFIG.description}`);
     console.log('');
@@ -164,7 +171,10 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-main().catch(error => {
+if (require.main === module) main().catch(error => {
     console.error('\n[!] 运行错误:', error.message);
     process.exit(1);
 });
+
+module.exports = {main, extractPageData, goToNextPage};
+}

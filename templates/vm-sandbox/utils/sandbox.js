@@ -6,6 +6,9 @@
 const vm = require('vm');
 
 function createSandbox(options = {}) {
+    const url = new URL(options.url || "https://example.com");
+    const timers = new Set();
+    const dispose = () => { for (const id of timers) clearTimeout(id); timers.clear(); };
     const cookies = {};
     const logs = [];
     
@@ -30,7 +33,7 @@ function createSandbox(options = {}) {
             querySelectorAll: () => [],
             head: { appendChild: () => {} },
             body: { appendChild: () => {} },
-            location: { href: options.url || 'https://example.com' },
+            location: null,
             referrer: '',
             readyState: 'complete',
         },
@@ -44,16 +47,15 @@ function createSandbox(options = {}) {
             hardwareConcurrency: 8, maxTouchPoints: 0,
         },
         
-        location: {
-            href: options.url || 'https://example.com',
-            protocol: 'https:', host: 'example.com',
-            hostname: 'example.com', pathname: '/', search: '', hash: '',
-            origin: 'https://example.com',
-        },
-        
+        location: Object.fromEntries(['href', 'protocol', 'host', 'hostname', 'port',
+            'pathname', 'search', 'hash', 'origin'].map(key => [key, url[key]])),
+
         screen: { width: 1920, height: 1080, availWidth: 1920, availHeight: 1055, colorDepth: 24, pixelDepth: 24 },
         
-        setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms || 0, 3000)),
+        setTimeout: (fn, ms) => {
+            const id = setTimeout(() => { timers.delete(id); fn(); }, Math.min(ms || 0, 3000));
+            timers.add(id); return id;
+        },
         setInterval: (fn, ms) => { /* 不执行定时器避免死循环 */ return -1; },
         clearTimeout, clearInterval,
         
@@ -83,6 +85,7 @@ function createSandbox(options = {}) {
         },
     };
     
+    sandbox.document.location = sandbox.location;
     sandbox.window = sandbox;
     sandbox.self = sandbox;
     sandbox.globalThis = sandbox;
@@ -114,7 +117,7 @@ function createSandbox(options = {}) {
         });
     }
     
-    return { sandbox, cookies, logs };
+    return { sandbox, cookies, logs, dispose };
 }
 
 /**
@@ -124,7 +127,7 @@ function createSandbox(options = {}) {
  * @returns {Object} { cookies, logs, success }
  */
 function executeAndExtractCookie(code, options = {}) {
-    const { sandbox, cookies, logs } = createSandbox(options);
+    const { sandbox, cookies, logs, dispose } = createSandbox(options);
     vm.createContext(sandbox);
     
     try {
@@ -146,6 +149,9 @@ function executeAndExtractCookie(code, options = {}) {
             cookies: { ...cookies },
             logs,
         };
+    } finally {
+        // This API is synchronous. Async signers need a separate async runner.
+        dispose();
     }
 }
 

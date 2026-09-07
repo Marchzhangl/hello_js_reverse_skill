@@ -157,7 +157,7 @@ instrumentation(action="log", tag_filter="vmp1", limit=10)
 ```
 Actions:
   launch_browser(headless=False)   # 有头调试，看浏览器行为
-  start_network_capture(capture_body=True)   # 抓响应体，后续 analyze_cookie_sources 需要
+  network_capture(action='start', capture_body=True)   # 抓响应体，后续 analyze_cookie_sources 需要
 ```
 
 ### Step 2 — 第一次导航定位 VMP 脚本 URL

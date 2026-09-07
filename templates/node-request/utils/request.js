@@ -19,8 +19,10 @@ class RequestClient {
         this.baseURL = options.baseURL || '';
         this.cookies = options.cookies || {};
         this.headers = { ...DEFAULT_HEADERS, ...options.headers };
-        this.delay = options.delay || 1000;
-        this.maxRetries = options.maxRetries || 3;
+        this.delay = options.delay ?? 1000;
+        this.maxRetries = options.maxRetries ?? 3;
+        if (!Number.isInteger(this.maxRetries) || this.maxRetries < 1) throw new Error("maxRetries must be positive");
+        this.retryNonIdempotent = options.retryNonIdempotent ?? false;
         this.referer = options.referer || '';
 
         this.client = axios.create({
@@ -68,7 +70,9 @@ class RequestClient {
         }
 
         let lastError;
-        for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+        const method = (config.method || 'GET').toUpperCase();
+        const attempts = ['GET', 'HEAD', 'OPTIONS'].includes(method) || this.retryNonIdempotent ? this.maxRetries : 1;
+        for (let attempt = 1; attempt <= attempts; attempt++) {
             try {
                 const response = await this.client.request(finalConfig);
                 this.parseCookies(response.headers['set-cookie']);
@@ -78,6 +82,7 @@ class RequestClient {
                 const status = error.response?.status;
                 console.error(`[Request] 第 ${attempt}/${this.maxRetries} 次请求失败: ${status || error.message}`);
 
+                if (attempt === attempts) throw error;
                 if (status === 429) {
                     const waitTime = this.delay * attempt * 2;
                     console.log(`[Request] 频率限制，等待 ${waitTime}ms...`);
@@ -87,6 +92,8 @@ class RequestClient {
                 } else if (status === 403 || status === 412) {
                     console.error('[Request] 访问被拒绝，可能需要更新 Cookie 或检查加密参数');
                     throw error;
+                } else if (!error.response && ['ECONNABORTED','ETIMEDOUT','ECONNRESET','EAI_AGAIN'].includes(error.code)) {
+                    await this.sleep(this.delay * attempt);
                 } else {
                     throw error;
                 }

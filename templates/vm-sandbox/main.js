@@ -1,3 +1,9 @@
+// Offline test dispatch must precede dependency loading and business work.
+if (process.argv.includes('--test')) {
+    const result = require('node:child_process').spawnSync(process.execPath,
+        [require('node:path').join(__dirname, 'test.js')], {stdio: 'inherit'});
+    process.exitCode = result.status ?? 1;
+} else {
 /**
  * 主脚本模板 - VM 沙箱执行
  * 
@@ -46,7 +52,7 @@ async function getDynamicCookie(client) {
     
     // 在VM沙箱中执行，提取Cookie
     const result = executeAndExtractCookie(jsCode, {
-        url: CONFIG.baseURL + CONFIG.referer,
+        url: new URL(CONFIG.referer, CONFIG.baseURL).href,
         initialCookie: client.getCookieString(),
     });
     
@@ -115,3 +121,5 @@ main().catch(error => {
     console.error('\n[!] 运行错误:', error.message);
     process.exit(1);
 });
+
+}
