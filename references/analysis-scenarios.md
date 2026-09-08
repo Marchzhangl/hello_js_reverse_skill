@@ -346,7 +346,7 @@ hook_jsvmp_interpreter(mode='transparent', persistent=true)
 ```
 # 用真实样本验证签名代码正确性
 verify_signer_offline(
-  signer_code="(sample) => { return {a_bogus: generateABogus(sample.input.url)}; }",
+  signer_code="(sample) => { return {a_bogus: generateABogus(sample.url)}; }",
   samples=[
     {id: "req1", input: {url: "..."}, expected: {a_bogus: "DFSz..."}},
     {id: "req2", input: {url: "..."}, expected: {a_bogus: "EGTa..."}},

@@ -1,11 +1,15 @@
-# MCP v1.6.0 工具契约
+# MCP v1.7.0 工具契约
 
-配套 Skill v3.7.0。完整参数快照见 [mcp-tools.json](mcp-tools.json)，实际执行时优先读取已安装 MCP 的工具定义。不要将快照的新参数发送给旧版本。
+配套 Skill v3.8.0。完整参数快照见 [mcp-tools.json](mcp-tools.json)，实际执行时优先读取已安装 MCP 的工具定义。不要将快照的新参数发送给旧版本。
 
 ## 本轮新增与兼容行为
 
 | 工具 | 新能力/修复 | 兼容说明 |
 |---|---|---|
+| compare_network_requests | 原始 query/Body 与字段差异、明确哈希口径 | 新工具，仅对已有捕获读取 |
+| save_response_body | 精确响应实体字节保存、SHA256/partial | 新工具，不补抓、不覆盖文件 |
+| take_snapshot | 有界等待与树大小、来源/截断标记 | 旧无参调用保留，默认超时 5 秒 |
+| check_environment | 任务级状态指纹、分项就绪、保留已有证据 | 旧字段保留，不自动清理 |
 | network_capture | max_body_size、stop 的 wait_timeout_ms；pending/dropped 指标 | 旧 start/stop/clear/status 调用继续可用；ID 清理后不复用 |
 | list_network_requests | limit/after_id 增量分页、state/body_state | 默认仍返回列表；domain 匹配修正为主机边界 |
 | get_network_request | 采集和读取两层截断元数据 | 保留旧字段；truncated 不再把残缺内容标为完整 |

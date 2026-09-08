@@ -7,8 +7,10 @@ be removed by the operator after confirming that the previous writer is gone.
 """
 import hashlib
 import json
+import math
 import os
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -33,19 +35,42 @@ def _atomic_json(path, data):
 
 def collect_to_jsonl(fetch_page, extract_items, next_cursor, *, output_path,
                      job_key, start_cursor=1, max_pages=100, item_key=None,
-                     checkpoint_path=None, resume=False):
+                     checkpoint_path=None, resume=False, stop_on_empty=True,
+                     max_cursor_repeats=0, cursor_retry_delay=0.0,
+                     max_pages_per_run=None):
     """Write complete pages and checkpoint after durable output.
 
     max_pages is the total job bound, including resumed pages. item_key is an
     optional callable for deduplication across pages/runs; missing keys must be
     rejected by that callable. job_key identifies endpoint/query/signer semantics
     and must change when those change. Never put credentials in job_key.
-    An empty list or next_cursor=None completes the job; hitting max_pages gives
-    status=limited, permitting a later resume with a higher explicit bound.
+    By default an empty list or next_cursor=None completes the job. With
+    stop_on_empty=False, next_cursor decides completion even for empty pages.
+    max_pages_per_run optionally bounds successful page commits in this call;
+    zero only creates/validates the checkpoint (and recovers an uncommitted tail).
+    Either page bound gives status=limited unless the job has completed.
+    max_cursor_repeats permits that many additional fetches when the returned
+    cursor equals the current cursor, waiting cursor_retry_delay seconds each
+    time. Enable this only when the caller knows fetch_page is safe to retry.
+    Rejected pages never write output, advance checkpoints or count as pages.
+    A cursor pointing to any previously committed page always fails immediately.
     Seen cursors/keys are retained in the checkpoint, intended for bounded jobs.
     """
-    if not isinstance(max_pages, int) or max_pages < 1 or not job_key:
+    if type(max_pages) is not int or max_pages < 1 or not job_key:
         raise ValueError('max_pages must be positive and job_key must be non-empty')
+    if type(stop_on_empty) is not bool:
+        raise ValueError('stop_on_empty must be a bool')
+    if type(max_cursor_repeats) is not int or max_cursor_repeats < 0:
+        raise ValueError('max_cursor_repeats must be a non-negative integer')
+    try:
+        valid_delay = (type(cursor_retry_delay) in (int, float) and
+                       math.isfinite(cursor_retry_delay) and cursor_retry_delay >= 0)
+    except OverflowError:
+        valid_delay = False
+    if not valid_delay:
+        raise ValueError('cursor_retry_delay must be a finite non-negative number of seconds')
+    if max_pages_per_run is not None and (type(max_pages_per_run) is not int or max_pages_per_run < 0):
+        raise ValueError('max_pages_per_run must be None or a non-negative integer')
     output = Path(output_path).resolve()
     checkpoint = Path(checkpoint_path).resolve() if checkpoint_path else output.with_suffix(output.suffix+'.checkpoint.json')
     if output == checkpoint:
@@ -92,18 +117,28 @@ def collect_to_jsonl(fetch_page, extract_items, next_cursor, *, output_path,
             stream.seek(state['offset'])
             if not resume:
                 _atomic_json(checkpoint, state)
-            while state['pages'] < max_pages and not state['complete']:
+            run_pages = 0
+            while (state['pages'] < max_pages and not state['complete'] and
+                   (max_pages_per_run is None or run_pages < max_pages_per_run)):
                 cursor = state['next_cursor']
                 cursor_key = _token(cursor)
                 if cursor_key in seen_cursors:
                     raise ValueError('pagination cursor repeated; no request was replayed')
-                payload = fetch_page(cursor)
-                items = extract_items(payload)
-                if not isinstance(items, list):
-                    raise ValueError('extract_items must return a list; validate business errors before extraction')
-                following = next_cursor(payload, cursor) if items else None
-                if following is not None and (_token(following) == cursor_key or _token(following) in seen_cursors):
-                    raise ValueError('pagination cursor cycle detected')
+                for attempt in range(max_cursor_repeats + 1):
+                    payload = fetch_page(cursor)
+                    items = extract_items(payload)
+                    if not isinstance(items, list):
+                        raise ValueError('extract_items must return a list; validate business errors before extraction')
+                    following = next_cursor(payload, cursor) if items or not stop_on_empty else None
+                    following_key = _token(following) if following is not None else None
+                    if following_key in seen_cursors:
+                        raise ValueError('pagination cursor cycle detected: historical cursor')
+                    if following is None or following_key != cursor_key:
+                        break
+                    if attempt == max_cursor_repeats:
+                        raise ValueError('pagination cursor cycle detected: current cursor retry limit reached')
+                    if cursor_retry_delay:
+                        time.sleep(cursor_retry_delay)
                 # Validate/serialize a whole page before mutating its checkpoint.
                 fresh, new_keys = [], set()
                 for item in items:
@@ -125,6 +160,7 @@ def collect_to_jsonl(fetch_page, extract_items, next_cursor, *, output_path,
                              sha256=digest.hexdigest(), complete=following is None,
                              seen_cursors=sorted(seen_cursors), seen_keys=sorted(seen_keys))
                 _atomic_json(checkpoint, state)
+                run_pages += 1
         return {'status':'complete' if state['complete'] else 'limited',
                 'pages':state['pages'],'items':state['items'],'output':str(output),
                 'checkpoint':str(checkpoint)}

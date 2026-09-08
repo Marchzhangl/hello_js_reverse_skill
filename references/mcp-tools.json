@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "mcp_version": "1.6.0",
+  "mcp_version": "1.7.0",
   "tools": [
     {
       "name": "check_environment",
@@ -47,6 +47,45 @@
           }
         },
         "title": "compare_envArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "compare_network_requests",
+      "parameters": {
+        "properties": {
+          "request_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Request Ids",
+            "type": "array"
+          },
+          "include_headers": {
+            "default": true,
+            "title": "Include Headers",
+            "type": "boolean"
+          },
+          "include_body": {
+            "default": true,
+            "title": "Include Body",
+            "type": "boolean"
+          },
+          "max_value_chars": {
+            "default": 200,
+            "title": "Max Value Chars",
+            "type": "integer"
+          },
+          "max_fields": {
+            "default": 100,
+            "title": "Max Fields",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "request_ids"
+        ],
+        "title": "compare_network_requestsArguments",
         "type": "object"
       }
     },
@@ -941,6 +980,32 @@
       }
     },
     {
+      "name": "save_response_body",
+      "parameters": {
+        "properties": {
+          "request_id": {
+            "title": "Request Id",
+            "type": "integer"
+          },
+          "save_path": {
+            "title": "Save Path",
+            "type": "string"
+          },
+          "allow_partial": {
+            "default": false,
+            "title": "Allow Partial",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "request_id",
+          "save_path"
+        ],
+        "title": "save_response_bodyArguments",
+        "type": "object"
+      }
+    },
+    {
       "name": "scripts",
       "parameters": {
         "properties": {
@@ -1020,7 +1085,18 @@
     {
       "name": "take_snapshot",
       "parameters": {
-        "properties": {},
+        "properties": {
+          "timeout_ms": {
+            "default": 5000,
+            "title": "Timeout Ms",
+            "type": "integer"
+          },
+          "max_nodes": {
+            "default": 1000,
+            "title": "Max Nodes",
+            "type": "integer"
+          }
+        },
         "title": "take_snapshotArguments",
         "type": "object"
       }

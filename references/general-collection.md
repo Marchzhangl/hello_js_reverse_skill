@@ -4,7 +4,7 @@
 
 ## 配置运行
 
-复制 `templates/python-request/` 到需求工作区，安装其 requirements，再将 `config/collection.example.json` 复制为私有任务配置并替换 URL/字段。
+先按依赖要求选入口：仅标准库任务可直接复用 `templates/python-request/utils/collector.py` 并接 urllib 回调；允许 requests 的任务再复制完整 `templates/python-request/` 到需求工作区、安装 requirements，并将 `config/collection.example.json` 复制为私有任务配置并替换 URL/字段。
 
 ```bash
 python collect.py --config config/job.json --output artifacts/items.jsonl
@@ -18,6 +18,25 @@ python collect.py --config config/job.json --output artifacts/items.jsonl --resu
 - `max_pages` 是包含已完成页数的总上限，默认 100；达到上限返回 `limited`，不会无限翻页。提高上限后可恢复。
 - `headers/cookies/params/body/method/timeout` 都来自任务配置。登录态缺失或业务校验失败时停止，不把错误响应当空页。
 - GET/HEAD/OPTIONS 对连接异常、超时、429/5xx 有界重试；POST 等不默认重放。自定义客户端可显式设置 `retry_non_idempotent=True`，调用者应先确认业务幂等条件。
+
+## v3.8 可选分页与恢复控制
+
+既有配置与默认值保留，按当前接口契约选择下列选项：
+
+| 配置 / 参数 | 语义 |
+|---|---|
+| 配置 `max_pages` | 整个 job 累计成功页数上限，包含历史已完成页 |
+| CLI `--max-pages N` / 核心 `max_pages_per_run` | 本次运行成功提交的页数上限，业务错误与重复重试不计数；0 只建立/核对 checkpoint |
+| CLI `--checkpoint PATH` | 指定断点文件，仍使用 `--resume` 显式恢复；不同任务 CLI 约定由适配层转换 |
+| `has_more_path` | 显式结束字段路径（也可放 pagination 内），返回值必须是 bool；true 而无下一游标会报错，空中间页不会被误认为结束 |
+| `stop_on_empty` / 核心 `stop_on_empty` | 默认 true 保留空页结束；false 时由 next_cursor 决定；配置 has_more_path 会优先按结束字段判断 |
+| `max_cursor_repeats` / `cursor_retry_delay` | 默认 0 次额外重试、0 秒等待；显式允许当前游标重复时才启用；历史游标循环仍立即失败 |
+| `retryable_path` / `max_business_retries` | 业务可重试标记必须是真正的 bool，默认重试 0 次；明确配置 GET 才允许启用重试 |
+| `retry_after_ms_path` / `max_retry_wait_ms` | 按业务响应的毫秒等待；默认最大接受等待 60000ms，超限停止并保留旧断点，不缩短等待后提前请求 |
+
+重复游标响应在此核心中属于未接受页：不落盘、不推进游标、不占成功页数。只有确认该接口可这样重试时才启用；若同一游标响应承载独有增量数据，需按契约另写提交策略。HTTP 客户端的旧 `max_retries` 指总尝试次数；上述业务/游标预算指额外重试次数，二者不要混淆。
+
+`templates/python-request/utils/collector.py` 只依赖 Python 标准库。任务要求纯标准库时，可复制该核心并使用 urllib 的 fetch_page 回调；不必为了 CLI 使用 requests 而重写已经验证的断点提交逻辑。字段路径、成功标记、登录/签名及返回格式仍由适配层处理，配置示例不包含站点凭据。
 
 ## 自定义签名与分页适配
 
@@ -90,3 +109,7 @@ python test.py
 ```
 
 `check-deps.sh` 仍可用，通过 `JS_REVERSE_PYTHON` 选择解释器。Node 依赖在复制后的模板目录安装，不假设全局 npm 包可以被项目加载。模板的 `npm test` 和 `node main.js --test` 均为离线测试；它们验证通用组件，不表示目标站点已经采集成功。
+
+读取 JSONL 时按 LF 分隔（例如 Python 逐行迭代文件），不要对整段 Unicode 文本使用 `str.splitlines()`：它也会把字符串值内部的 U+2028 等字符当分隔符。记录内容中的 Unicode 必须原样保留，不能为读日志而改写签名输入或数据。
+
+CLI 为保持既有语义，将下一 cursor 的 null/空字符串视为结束或缺失；若接口允许初始空字符串作为可重试的真实游标，使用核心的自定义 next_cursor 回调明确区分这些状态。CLI 的固定 cursor_retry_delay 也不代替逐响应等待策略，需动态提示时由协议适配层处理。

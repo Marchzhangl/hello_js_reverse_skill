@@ -56,13 +56,9 @@ project_name/
 └── README.md
 ```
 
-### Phase 0.5：经验库命中验证（**Phase 0 完成后的唯一合法下一步**）
+### Phase 0.5：按需查阅相关经验
 
-> ⚠️ 本步骤在硬约束 Checklist 的 [CHECK-2] 中已经**预执行**过。
-> 这里是 Phase 0 完成后做**二次确认和深入**：
->
-> - 如果 [CHECK-2] 命中某个 case → 本步骤详读该 case，按其"已验证定位路径"执行
-> - 如果 [CHECK-2] 未命中 → 本步骤做**指纹采集**，分析结束时沉淀新 case
+仅在当前任务涉及相应签名、混淆或环境依赖时读取相关案例。若首检已经确认同一版本案例仍适用，直接复用记录；不要求再次全库扫描。资源取证、普通 API 采集和离线代码维护可跳过此阶段。
 
 #### 0.5.1 命中某个 case 的行为
 
@@ -131,7 +127,7 @@ Actions:
 - evaluate_js / click / type_text → 触发翻页/交互，产生请求
 - list_network_requests → 获取捕获的请求列表（支持过滤）
 - get_network_request(request_id=N) → 获取关键接口的详细信息
-- get_request_initiator(request_id=N) → 获取发起请求的 JS 调用栈（黄金路径！）
+- get_request_initiator(request_id=N) → 获取可能的 JS 发起栈，核对 match_confidence 与输入证据
 
 重点关注:
 - Request URL、Method
@@ -630,8 +626,8 @@ project_name/
 
 ```
 Actions:
-1. 运行 main.js / main.py，确认输出正确数据
-2. 与浏览器实际数据交叉验证（≥ 5 次请求，确认签名稳定性）
+1. 运行当前任务要求的程序或验证产物：采集结果、独立签名函数或资源文件
+2. 签名/API 任务用代表性新输入与成功/失败样本交叉验证（建议至少 5 次，具体范围遵循任务约定）；资源取证验证字节、哈希和真实调用，不制造无关接口请求
 3. verify_signer_offline(signer_code, samples=[...]) 用真实样本离线验证签名代码
    - signer_code: JS 代码，evaluating to a function: (sample) => {param: computed_value}
    - samples: [{id, input, expected}] 从真实请求中提取
@@ -661,10 +657,10 @@ Actions:
 
 | 交付项 | 必须 | 说明 |
 |--------|------|------|
-| 可运行的 main.js / main.py | ✅ | 纯协议脚本，无浏览器依赖 |
-| config/ 目录 | ✅ | 密钥、Headers、JS 代码等配置 |
+| 当前任务要求的可用产物 | ✅ | 采集程序、签名模块或资源文件，按任务类型选择 |
+| 必要配置与证据 | 按任务 | 数据/签名程序说明配置；资源任务保留来源、哈希和验证记录 |
 | README.md | ✅ | 项目说明 + 接口分析记录 |
-| ≥ 5 次请求验证 | ✅ | 确认签名稳定性 |
+| 任务对应的验证 | ✅ | API/签名验证新输入；资源核对字节与调用，不统一要求请求次数 |
 | cases/ 经验沉淀 | 按需 | 脱敏、标注适用版本和验证范围 |
 
 #### 5.5 关闭浏览器
