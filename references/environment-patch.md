@@ -395,7 +395,7 @@ function createFullBrowserEnv(options = {}) {
    + get_console_logs
    → 确定运行时真正访问了哪些环境字段
 
-3. [camoufox-reverse] set_breakpoint_via_hook(target_function="环境检测函数路径")
-   + get_breakpoint_data
+3. [camoufox-reverse] hook_function(mode='trace', function_path="环境检测函数路径")
+   + get_trace_data
    → 在环境检测函数入口捕获入参、返回值和调用栈，确认需要补全的关键分支
 ```

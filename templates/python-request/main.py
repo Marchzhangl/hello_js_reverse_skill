@@ -3,6 +3,7 @@
 使用前请修改 CONFIG 中的配置和 utils/sign.py 中的签名逻辑
 """
 import json
+from pathlib import Path
 import time
 from utils.sign import generate_sign, generate_m
 from utils.request import RequestClient
@@ -19,11 +20,11 @@ CONFIG = {
 }
 
 # 从配置文件加载 Headers 模板
-with open("config/headers.json", "r", encoding="utf-8") as f:
+with open(Path(__file__).parent / "config/headers.json", "r", encoding="utf-8") as f:
     HEADERS_TEMPLATE = json.load(f)
 
 # 从配置文件加载密钥
-with open("config/keys.json", "r", encoding="utf-8") as f:
+with open(Path(__file__).parent / "config/keys.json", "r", encoding="utf-8") as f:
     KEYS = json.load(f)
 
 

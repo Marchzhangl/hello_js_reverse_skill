@@ -1,19 +1,47 @@
 # JS 逆向分析 Skill
 
-面向 Web 逆向分析与接口签名还原场景的 Skill，围绕 `camoufox-reverse` MCP 构建单一工作流：先用 Camoufox 反检测浏览器完成网络捕获、源码定位、Hook 调试与反检测验证，再按需落地到 Node.js 或 Python 算法还原与自动化调用。
+面向 Web API 通用采集、接口签名分析与改版回归的 Skill。已有协议与样本时直接验证 Node.js/Python 调用；需要页面取证时使用 Camoufox MCP 捕获网络、定位源码和调试 Hook，再交付可验证的采集程序。
+
+## v3.9.0：真实开源案例与实操反馈
+
+- 可重复准备 KProtect VM、javascript-obfuscator CFF、CryptoJS/FingerprintJS，并通过真实 MCP 验证原始/插桩、加解密及原生 trace。
+- 对齐 MCP v1.8.0 的主世界/Frame 日志、现代语法解析、保守改写、精确 Unicode 返回及同步异常 Hook。
+- 延续“任务首次检查、后续复用、变化时局部复查”，移除旧索引重复扫描和未经验证的覆盖率描述。
+
+见 [v3.9.0](docs/releases/v3.9.0.md)、[实战经验](references/real-source-cases.md)、[准备与复现](scripts/real_cases/README.md)。
+
+## v3.8.0：任务级检查与多轮实操迭代
+
+- 首次按任务检查，后续复用；浏览器/Frame/鉴权/SDK等相关状态变化时局部复查，避免反复审查或误清理。
+- 对齐 MCP v1.7.0 的请求差异、响应文件、哈希单位与失败诊断，按任务类型验收。
+- 采集核心增加显式结束字段、空中间页、可选重试和本次页数上限，保留既有默认语义。
+- 经过三轮独立 Agent 的真实 MCP/HTTP 实操，保存失败记录并修正；最后一轮三个产物全部通过独立验收。
+
+使用说明见 [通用采集](references/general-collection.md)、[任务级检查](references/task-preflight.md)、[v3.8.0 版本说明](docs/releases/v3.8.0.md)。
+
+## v3.7.0：通用采集与改版回归
+
+配套 MCP v1.6.0，保留现有 Skill 名称和模板路径。默认协议采集；浏览器自动化仅用于用户明确选择的交付方式。
+
+- Python 模板新增可配置 JSON API 采集：page/offset/cursor 分页、业务校验、主键去重、JSONL、页级 checkpoint 和恢复校验。
+- MCP 新增增量捕获、带截断/丢弃状态的导出，以及可选 Node.js 独立验签；修复并发响应归属、Cookie 删除和无效验签样本误通过。
+- 模板 `npm test` / `node main.js --test` 为离线测试；修复 VM 地址、location、定时器和 Python Cookie；请求默认不自动重放 POST。
+- 使用 `project-baseline.py` 保存 SDK/签名代码/fixture 哈希，`check-mcp-contract.py` 校验工具契约，依赖自检按任务模式选择。
+
+使用说明见 [通用采集指南](references/general-collection.md)，完整版本说明见 [v3.7.0](docs/releases/v3.7.0.md)。
 
 ## 核心能力
 
 - **双语言算法还原**: Node.js (`crypto` / `crypto-js`) 与 Python (`hashlib` / `pycryptodome`) 双路径实现
 - **加密算法还原**: MD5/SHA/AES/DES/RSA/HMAC/Base64 等常见加密算法的纯算法复现
 - **JS 混淆还原**: OB混淆、控制流平坦化、eval打包、自定义VM/JSVMP 等混淆类型的分析策略
-- **JSVMP 行为追踪**: Hook/插桩/日志/源码级插桩四板斧（v2.5.0 新增第四板斧），从行为层面追踪 JS 虚拟机保护的签名生成链路，对RS 5/6、Akamai sensor_data、webmssdk、obfuscator.io 通用有效（详见专项指南）
+- **JSVMP 行为追踪**: Hook/插桩/日志/源码级插桩四板斧（v2.5.0 新增第四板斧），从行为层面追踪 JS 虚拟机保护的签名生成链路，提供通用调查路径，实际有效性需按目标样本验证（详见专项指南）
 - **Cookie 归因分析**: `analyze_cookie_sources` 融合 HTTP Set-Cookie 与 JS document.cookie 日志，一次性解答"这个 Cookie 到底是谁写的"（v2.5.0 新增）
 - **反爬类型分档决策（v2.6.0）**：签名型（RS/Akamai）/ 行为型（TK/JY）/ 纯混淆 三类反爬的工具路径完全不同，内置顶层决策框架，避免"observer effect 破坏签名"的经典陷阱
 - **动态 Cookie 逆向**: eval首包、api预热、浏览器指纹等 Cookie 生成机制的破解
 - **WASM 逆向**: WebAssembly 加密模块的加载、环境补全和调用
 - **协议层对抗**: TLS 指纹检测、HTTP/2 强制、频率限制等协议层防护的应对
-- **反检测浏览器**: Camoufox C++ 引擎级指纹伪装，绕过 Cloudflare/RS/JY等反爬检测
+- **反检测浏览器**: Camoufox C++ 引擎级指纹配置，用于反爬与环境依赖分析，站点可用性按实测判断
 - **单 MCP 工作流**: 统一使用 `camoufox-reverse` 完成源码搜索、Hook 注入、函数追踪、网络分析、请求拦截与反检测验证
 - **错误排查体系**: 完整的请求失败排查流程和签名值不一致排查方法论
 - **Codex/Claude Code 完整适配**: 内置 Agent 授权指令框架，确保 AI 全力协助完成分析任务
@@ -41,7 +69,7 @@ AI 会自动完成下载、配置，并在后续 JS 逆向相关任务中自动�
 git clone https://github.com/WhiteNightShadow/hello_js_reverse_skill.git ~/.cursor/skills/hello_js_reverse_skill
 ```
 
-**Claude Code（Codex CLI）：**
+**Codex：**
 
 ```bash
 git clone https://github.com/WhiteNightShadow/hello_js_reverse_skill.git ~/.codex/skills/hello_js_reverse_skill
@@ -65,10 +93,10 @@ hello_js_reverse_skill/
 │
 ├── references/                     # 参考文档（深度背景，按需读取）
 │   ├── workflow-overview.md        # 工作流总览与解法模式决策树
-│   ├── phase-details.md            # Phase 0-5 详细操作（v3.3.0 起以 SKILL.md 为准）
-│   ├── mcp-cookbook.md             # MCP 工具场景手册（v3.3.0 起以 SKILL.md 为准）
+│   ├── phase-details.md            # Phase 0-5 详细操作（v3.7.0 按需读取）
+│   ├── mcp-cookbook.md             # MCP 工具场景手册（v3.7.0 按需读取）
 │   ├── mcp-tool-reference.md      # MCP 工具名迁移映射
-│   ├── experience-rules-full.md   # 经验法则完整版（v3.3.0 起以 SKILL.md 为准）
+│   ├── experience-rules-full.md   # 经验法则完整版（v3.7.0 按需读取）
 │   ├── path-a-four-tools.md       # 路径 A 四板斧详细步骤
 │   ├── path-b-env-emulation.md    # 路径 B 环境伪装六步法
 │   ├── jsvmp-analysis.md          # JSVMP 字节码分析
@@ -266,6 +294,9 @@ python main.py
 
 | 版本 | 日期 | 要点 |
 |------|------|------|
+| v3.9.0 | 2026-09-08 | 真实开源案例公开复现、现代解析/低副作用观测、精确数据与独立Agent复验 |
+| v3.8.0 | 2026-09-08 | 公开方案研究、任务级检查、三轮Agent实操反馈、证据诊断与可选分页恢复增强 |
+| v3.7.0 | 2026-09-07 | 通用采集与断点恢复、独立验签、模板修复、三平台 CI 和契约基线 |
 | v3.6.1 | 2026-09-07 | 对齐 MCP v1.5.1：补充 Trace 清理、未来 Frame 预注册、执行失败不重放和 Hook 卸载边界 |
 | v3.6.0 | 2026-09-04 | 对齐 MCP v1.5.0；新增主世界与 Frame 选择、动态目标持久 Hook、`pending` 状态和 Trace 数据读取规范 |
 | v3.5.1 | 2026-09-03 | 对齐 MCP v1.4.1 / Camoufox Reverse reverse.5；LocalStorage 覆盖迁移至 Firefox 152 LSNG，并纳入可达的 partitioned 分支，protocol 1 不变 |

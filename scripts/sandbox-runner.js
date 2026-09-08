@@ -22,6 +22,7 @@ class SandboxRunner {
             ...options,
         };
         
+        this._timers = new Set();
         this.cookies = {};
         this.logs = [];
         this.errors = [];
@@ -45,10 +46,10 @@ class SandboxRunner {
             screen: { width: 1920, height: 1080, availWidth: 1920, availHeight: 1055, colorDepth: 24, pixelDepth: 24 },
             history: { length: 1, pushState: () => {}, replaceState: () => {}, back: () => {}, forward: () => {} },
             
-            setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms || 0, 5000)),
-            setInterval: (fn, ms) => setInterval(fn, Math.max(ms || 100, 100)),
+            setTimeout: (fn, ms) => this._setTimer(fn, Math.min(ms || 0, 5000)),
+            setInterval: (fn, ms) => this._setTimer(fn, Math.max(ms || 100, 100), true),
             clearTimeout, clearInterval,
-            requestAnimationFrame: (fn) => setTimeout(fn, 16),
+            requestAnimationFrame: (fn) => this._setTimer(fn, 16),
             cancelAnimationFrame: clearTimeout,
             
             String, Array, Object, Math, Date, RegExp, JSON, Map, Set, WeakMap, WeakSet,
@@ -266,7 +267,22 @@ class SandboxRunner {
         }
     }
 
+    _setTimer(fn, delay, repeat = false) {
+        const id = repeat ? setInterval(fn, delay) : setTimeout(() => {
+            this._timers.delete(id); fn();
+        }, delay);
+        this._timers.add(id);
+        return id;
+    }
+
+    dispose() {
+        for (const id of this._timers) { clearTimeout(id); clearInterval(id); }
+        this._timers.clear();
+    }
+
     run(code, filename = 'sandbox.js') {
+        this.dispose();
+        this.cookies = {}; this.logs = []; this.errors = [];
         const sandbox = this.createSandbox();
         vm.createContext(sandbox);
         
@@ -294,6 +310,9 @@ class SandboxRunner {
                 logs: [...this.logs],
                 errors: [...this.errors],
             };
+        } finally {
+            // run/runFile return synchronous snapshots, never leave live timers.
+            this.dispose();
         }
     }
 
@@ -336,6 +355,7 @@ if (require.main === module) {
     
     if (!result.success) {
         console.log('错误:', result.error);
+        process.exitCode = 1;
     }
     
     if (Object.keys(result.cookies).length > 0) {

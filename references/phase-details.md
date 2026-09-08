@@ -1,45 +1,31 @@
-> ⚠️ v3.3.0 起，本文档的核心动作清单已回迁到 SKILL.md 核心层。
-> 本文档保留作为深度背景参考，但**以 SKILL.md 为准**。如发现不一致，以 SKILL.md 为准。
+# 深度分析流程（v3.7.0）
 
-# Phase 0-5 详细操作手册
+仅在遇到接口签名、混淆、JSVMP 或环境依赖时按当前阶段读取。普通 JSON API 采集先读 [general-collection.md](general-collection.md)，无需逐项执行逆向流程。行为约定与验收以 [SKILL.md](../SKILL.md) 为准。
 
-> **触发条件**：执行某个 Phase 不确定具体怎么做时读
->
-> **前置要求**：已完成硬约束 Checklist 五项复述（见 SKILL.md 顶部）
->
-> **版本**：v3.1.0（MCP v0.9.0 工具名迁移）
+### Phase 0：任务理解与调试环境搭建
 
----
+> ⚠️ **开始本段前，确认已完成SKILL.md 中与本任务相关的环境、经验和交付约定检查**。
 
-## Phase 0：任务理解与调试环境搭建
+目标：接收任务，理解业务诉求，搭建 MCP 工具栈。
 
-### 0.1 任务理解
+#### 0.1 任务理解
 
 收到用户的目标 URL 和分析需求后：
-
 1. **明确分析目标**：需要还原哪些加密参数、目标数据是什么
-2. **接口分析**：
-   - 梳理请求的 URL、Method、Headers、Params、Body
-   - 识别并标记签名/动态参数（如 `sign`、`token`、`timestamp`、`nonce`）
-   - 根据参数特征（长度、字符集、结构）给出算法初步判断
-   - 以简洁表格汇总分析结果，与用户确认
+2. **接口分析**：梳理请求的 URL、Method、Headers、Params、Body；识别签名/动态参数；根据参数特征（长度、字符集、结构）给出算法初步判断
 
-### 0.2 浏览器搭建
-
-根据用户是否提供 Cookie，选择对应路径：
-
-#### 路径 A：带 Cookie 启动
+#### 0.2 浏览器搭建
 
 ```
 MCP 操作：
   launch_browser(headless=false)
-  → 启动反检测浏览器（有头模式，方便用户观察）
+  → 默认启动反检测浏览器，不启用原生追踪，保留正常 content sandbox
 
   navigate(url="目标URL")
   → 导航到目标页面
 
-  cookies(action='set', cookies=[...])
-  <!-- v3.1.0: migrated from set_cookies -->
+  # 如有 Cookie：
+  cookies(action='set', cookies_list=[{name:"k1", value:"v1", domain:".example.com", path:"/"}])
   → 写入 Cookie
 
   reload()
@@ -49,219 +35,117 @@ MCP 操作：
   → 验证写入成功
 ```
 
-#### 路径 B：直接启动（无 Cookie）
-
-```
-MCP 操作：
-  launch_browser(headless=false)
-  navigate(url="目标URL")
-  → 直接进入后续分析阶段
-```
-
-### 0.3 Cookie 写入方法
-
-用户提供的 Cookie 可能有多种格式：
+#### 0.3 Cookie 写入方法
 
 | 格式 | 处理方式 |
 |------|---------|
 | Cookie 字符串 `"k1=v1; k2=v2"` | 拆分后构造 `[{name:"k1", value:"v1", domain:".example.com", path:"/"}]` |
-| JSON 格式（EditThisCookie 导出） | 直接传入 `cookies(action='set', ...)` <!-- v3.1.0: migrated from set_cookies --> |
+| JSON 格式（EditThisCookie 导出） | 直接传入 `cookies(action='set', cookies_list=[...])` |
 | Request Headers 中的 Cookie 字段 | 按 `"; "` 拆分后构造数组 |
 
-### 0.4 项目目录创建
+#### 0.4 项目目录创建
 
 以目标网站/功能命名，结构参考 `templates/` 下的模板：
 
-**Node.js 项目：**
 ```
 project_name/
-├── config/
-│   ├── encrypt.js          # 提取的原始 JS 加密代码
-│   ├── keys.json           # 密钥、IV、Salt 等配置
-│   └── headers.json        # 请求头模板
-├── utils/
-│   ├── encrypt.js          # 加密参数生成函数
-│   └── request.js          # 请求封装
-├── main.js                 # 主脚本
-├── package.json
+├── config/          # 密钥、Headers、JS 代码等配置
+├── utils/           # 加密/请求封装
+├── main.js          # 主脚本（或 main.py）
+├── package.json     # 依赖（或 requirements.txt）
 └── README.md
 ```
 
-**Python 项目：**
-```
-project_name/
-├── config/
-│   ├── sign_logic.js       # 提取的签名逻辑代码
-│   ├── keys.json           # 密钥配置
-│   └── headers.json        # 请求头模板
-├── utils/
-│   ├── sign.py             # 签名函数封装
-│   └── request.py          # 请求封装
-├── main.py
-├── requirements.txt
-└── README.md
-```
+### Phase 0.5：按需查阅相关经验
 
----
+仅在当前任务涉及相应签名、混淆或环境依赖时读取相关案例。若首检已经确认同一版本案例仍适用，直接复用记录；不要求再次全库扫描。资源取证、普通 API 采集和离线代码维护可跳过此阶段。
 
-## Phase 0.5：经验库命中验证
-
-> ⚠️ 本步骤在硬约束 Checklist 的 [CHECK-2] + [CHECK-3] 中已经预执行过。
-> 这里是 Phase 0 完成后做二次确认和深入。
-
-### 四分支决策
+#### 0.5.1 命中某个 case 的行为
 
 ```
-┌─ [CHECK-2] 命中案例？
-│   └─ YES → 分支 1：命中 cases/
-│
-├─ [CHECK-2] 命中工作区 site_* 目录？
-│   └─ YES → 分支 2：命中 site_*
-│
-├─ [CHECK-3] 历史 session 存在？
-│   └─ YES → 分支 3：有历史 session
-│
-└─ 全部未命中 → 分支 4：全未命中（30 秒指纹采集）
+readFile("cases/<命中的 case>.md")  # 读取方案方向 + 踩坑记录 + 站点风格
+
+案例的价值是踩坑记录和站点风格,不是可直接运行的代码。
+站点会迭代改版,案例代码可能已过期,但踩坑记录不会轻易过期。
+
+命中案例后的执行要求:
+1. 精读案例的「踩坑记录」和「关键经验总结」,内化为本次的约束条件
+2. Phase 1-5 仍然正常走,用当前环境的实际数据驱动实现
+3. Phase 4 编码时,每个实现决策回查案例踩坑记录,确认是否有对应的坑要避开
+4. Phase 5 结束后,将本次新发现的踩坑点追加到案例
+
+反模式:
+❌ 读了案例 → 只提取方案方向 → 关掉案例 → 自己从零实现 → 踩坑记录里的坑全部重踩
+✅ 读了案例 → 踩坑记录内化为约束 → 每步实现时回查 → 遇到问题先查案例再调试
+
+⚠️ 命中案例 = 知道前人踩过哪些坑,不等于有现成可用的代码,也不等于跳过分析流程
 ```
 
-### 分支 1：命中 cases/
+#### 0.5.2 未命中任何 case 的行为
+
+30 秒指纹采集，然后走标准 Phase 1-5 流程：
 
 ```
-MCP 操作：
-  readFile("cases/<命中案例>.md")
-  → 详读已验证定位路径
-  → 按该案例的 Phase 1-5 执行（不要自创流程）
-  → 加 1-2 条本次站点特有的断言到 session（区别已有变体）
+# 反爬 SDK / 系统特征
+search_code(keyword="webmssdk")         # webmssdk 家族
+search_code(keyword="byted_acrawler")   # webmssdk 家族
+search_code(keyword="_sdkGlueInit")     # 抖音特征
+search_code(keyword="cacheOpts")        # TikTok 特征
+search_code(keyword="sdenv")            # 瑞数 RS 特征
+search_code(keyword="FSSBBIl1UgzbN7N")  # RS cookie 特征
+
+# 签名参数特征
+search_code(keyword="a_bogus")          # 抖音
+search_code(keyword="X-Bogus")          # TikTok 国际版
+search_code(keyword="X-Gnarly")         # TikTok 国际版
+search_code(keyword="acw_sc__v2")       # Aliyun WAF
 ```
 
-### 分支 2：命中 site_* 目录
-
-```
-MCP 操作：
-  listDirectory("site_<target>/")
-  → 识别 sign_service.js / cookie_fetcher.js / parser.js / keys.json 等文件
-
-  若有 sign_service.js（已有协议方案）：
-    → 直接基于 sign_service.js 建新目录复用
-    → 不要从零写新方案
-    → 不要用 Playwright/Camoufox 过挑战（违反红线 3）
-
-  若只有 cookie_fetcher.js（浏览器兜底方案）：
-    → 警告：这是违反红线 3 的历史残留
-    → 本次目标应是替换为协议方案
-```
-
-### 分支 3：有历史 session
-
-```
-MCP 操作：
-  attach_domain_readonly("<eTLD+1>")     # 在 CHECK-3 已做
-  verify_assertion(assertion_id='*')     # 批量验证所有断言
-  <!-- v3.1.0: migrated from reverify_all_assertions_on_domain -->
-
-  根据 triage.interpretation：
-    "all assertions still hold"
-      → 跳到 Phase 5 直接验证旧协议代码
-
-    "Minor update"
-      → 工作范围 = failed_ids，只修这几条
-
-    "Moderate L4 change"
-      → Phase 1-4 走一遍，但 passed 的是 invariants
-
-    "Major L4 upheaval"
-      → 重做，但 passed 断言仍是不变量
-```
-
-### 分支 4：全未命中（30 秒指纹采集）
-
-```
-MCP 操作（这些命令在 CHECK-2 时已跑过，这里是深入）：
-
-  # JSVMP / SDK 特征识别
-  search_code(keyword="webmssdk")        # webmssdk 家族
-  search_code(keyword="byted_acrawler")  # webmssdk 家族
-  search_code(keyword="_sdkGlueInit")    # 抖音特征
-  search_code(keyword="cacheOpts")       # TikTok 特征
-  search_code(keyword="sdenv")           # 瑞数 RS 特征
-  search_code(keyword="meta-12")         # RS 6 特征
-  search_code(keyword="FSSBBIl1UgzbN7N") # RS cookie 特征
-
-  # 签名参数特征识别
-  search_code(keyword="a_bogus")         # 抖音
-  search_code(keyword="X-Bogus")         # TikTok 国际版
-  search_code(keyword="X-Gnarly")        # TikTok 国际版
-  search_code(keyword="acw_sc__v2")      # Aliyun WAF
-
-  # 环境检测 SDK
-  search_code(keyword="acmescripts")     # Akamai
-
-  # 反爬类型关键字
-  get_network_request(request_id=<first_request>)
-  list_network_requests(resource_type="script")
-```
-
-采集完后，**必须**在本次分析结束时沉淀新案例：
-1. 按 `cases/_template.md` 格式建立 `cases/<新案例名>.md`
+没有命中时先保留需求工作区的分析记录；发现新的通用经验时沉淀：
+1. 按 `cases/_template.md` 格式建立 `cases/<新案例>.md`
 2. 更新 `cases/README.md` 的"高频站点速查表"追加一行
-3. 更新 `cases/README.md` 的"变体关系图"（如有兄弟案例）
 
----
+### Phase 1：目标侦察（自动执行）
 
-## Phase 1：目标侦察
+使用 MCP 工具完成以下侦察，**不需要用户手动操作**：
 
-### 1.1 确认调试页面状态
-
-```
-MCP 操作：
-  take_screenshot()
-  → 截取当前页面视觉状态，确认页面正常
-
-  如需导航到特定子页面：
-  navigate(url="目标子页面")
-
-  如果涉及登录态，确认 Cookie 已写入且页面内容正确
-```
-
-### 1.2 网络请求捕获
+#### 1.1 确认调试页面状态
 
 ```
-MCP 操作：
-  network_capture(action='start')
-  <!-- v3.1.0: migrated from start_network_capture -->
-  → 开始捕获网络流量
-
-  evaluate_js / click / type_text
-  → 触发翻页/交互，产生请求
-
-  list_network_requests()
-  → 获取捕获的请求列表（支持过滤）
-
-  get_network_request(request_id=N)
-  → 获取关键接口的详细信息
-
-  get_request_initiator(request_id=N)
-  → 获取发起请求的 JS 调用栈（黄金路径！）
-
-  重点关注：
-    - Request URL、Method
-    - Request Headers（Cookie、自定义签名头）
-    - Query Params / Request Body（识别加密参数）
-    - Response 数据结构
-    - Initiator Stack（直接定位加密函数）
+Actions:
+- Phase 0 中已通过 launch_browser + navigate 启动反检测浏览器并加载目标页面
+- take_screenshot → 截取当前页面视觉状态，确认页面正常
+- 如需导航到特定子页面：navigate(url="目标子页面")
+- 如果涉及登录态，确认 Cookie 已写入且页面内容正确
 ```
 
-### 1.3 加密参数识别
+#### 1.2 网络请求捕获
+
+```
+Actions:
+- network_capture(action='start') → 开始捕获网络流量
+- evaluate_js / click / type_text → 触发翻页/交互，产生请求
+- list_network_requests → 获取捕获的请求列表（支持过滤）
+- get_network_request(request_id=N) → 获取关键接口的详细信息
+- get_request_initiator(request_id=N) → 获取可能的 JS 发起栈，核对 match_confidence 与输入证据
+
+重点关注:
+- Request URL、Method
+- Request Headers（Cookie、自定义签名头）
+- Query Params / Request Body（识别加密参数）
+- Response 数据结构
+- Initiator Stack（直接定位加密函数）
+- 重复上述步骤，收集多次请求进行对比
+```
+
+#### 1.3 加密参数识别
 
 对比多次请求，分析每个参数：
+- **固定值**：直接硬编码或从页面提取
+- **动态值**：判断变化因子（时间戳、页码、随机数、自增计数器）
+- **加密值**：根据长度、字符集、格式初步判断算法类型
 
-| 参数类型 | 特征 | 处理方式 |
-|----------|------|---------|
-| 固定值 | 每次请求相同 | 直接硬编码或从页面提取 |
-| 动态值 | 有规律变化 | 判断变化因子（时间戳、页码、随机数、自增） |
-| 加密值 | 看似随机 | 根据长度、字符集、格式判断算法类型 |
-
-### 1.4 输出侦察报告
+#### 1.4 输出侦察报告
 
 ```
 📋 目标信息
@@ -292,70 +176,67 @@ Headers：
   3. [如：AES-CBC加密]
 ```
 
----
+### Phase 2：源码分析
 
-## Phase 2：源码分析
+根据 Phase 1 识别到的加密参数，在调试浏览器页面上深入 JS 源码。
 
-### 2.1 关键词搜索定位
+#### 2.1 关键词搜索定位
 
 ```
-MCP 操作：
-  search_code(keyword="加密参数名")
-  → 直接在已加载的 JS 源码中搜索
+Actions:
+- search_code(keyword="加密参数名") → 直接在已加载的 JS 源码中搜索
+- search_code(keyword="encrypt|sign|token|md5|sha|aes|des|rsa|hmac|btoa|atob|CryptoJS")
+- search_code(keyword="XMLHttpRequest|$.ajax|fetch|beforeSend")
+- search_code(keyword="document.cookie")
 
-  search_code(keyword="encrypt|sign|token|md5|sha|aes|des|rsa|hmac|btoa|atob|CryptoJS")
-  search_code(keyword="XMLHttpRequest|$.ajax|fetch|beforeSend")
-  search_code(keyword="document.cookie")
-
-  根据搜索结果：
-  scripts(action='get', url='<脚本URL>')
-  <!-- v3.1.0: migrated from get_script_source -->
-  → 读取包含加密逻辑的源码片段
-
-  scripts(action='save', url='<脚本URL>', save_path='./config/target.js')
-  <!-- v3.1.0: migrated from save_script -->
-  → 保存关键脚本到本地分析
+根据搜索结果：
+- scripts(action='get', url='<脚本URL>') → 读取包含加密逻辑的源码片段
+- scripts(action='save', url='<脚本URL>', save_path='./config/target.js') → 保存关键脚本到本地分析
 ```
 
-### 2.2 代码混淆识别
+#### 2.2 代码混淆识别与还原
 
 | 混淆类型 | 特征 | 还原策略 |
-|---------|------|---------|
-| OB 混淆 | `_0x` 前缀变量、十六进制字符串数组 | 字符串解密 + 变量重命名 |
-| 控制流平坦化 | `switch-case` 状态机、`while(true)` 循环 | 追踪状态转移还原执行顺序 |
+|---|---|---|
+| OB 混淆 (obfuscator.io) | `_0x` 前缀变量、十六进制字符串数组 | 字符串解密 + 变量重命名 |
+| 控制流平坦化 (CFF) | `switch-case` 状态机、`while(true)` 循环 | 追踪状态转移还原执行顺序 |
 | eval/Function 打包 | `eval(...)` 或 `new Function(...)` 包裹 | Hook eval/Function 拦截源码 |
-| JSVMP | 200KB+ 文件、自定义解释器 | 不反编译，走路径 A 或路径 B |
+| JSVMP | 200KB+ 文件、自定义解释器 | **不反编译**，走路径 A 或路径 B |
 
-### 2.2+ JSVMP 专项分析
+#### 2.2+ JSVMP 专项分析（核心能力）
 
-当识别到 JSVMP 时，**严禁尝试反编译字节码**。
+当识别到 JSVMP（JS 虚拟机保护）时，**严禁尝试反编译字节码**。
 
-#### JSVMP 识别标志
-
+**识别标志**：
 - 超大 JS 文件（200KB+），函数/变量名完全无意义
 - 包含自定义解释器循环：`while(true) { switch(opcode) { ... } }`
 - 改写或劫持浏览器原生 API（XHR / fetch / Cookie）
 - 超大数组（字节码）+ 指针变量 + 栈操作 + 跳转指令
 
-#### 路径选择决策树
+**路径选择决策**：
+
+| 路径 | 目标 | 方法 | 适用场景 | 典型用时 |
+|---|---|---|---|---|
+| A：算法追踪 | 搞清 JSVMP 内部算法，用纯代码还原 | 四板斧（Hook/插桩/日志/源码级插桩） | JSVMP 算法可提取、环境依赖少 | 4-8 小时 |
+| B：环境伪装 | 在 jsdom/vm 中运行原始 JSVMP | 环境采集 → 对比 → 补丁 | JSVMP 与环境深度绑定、算法不可提取 | 2-4 小时 |
 
 ```
 决策树：
-  ├─ JSVMP 是否劫持了请求链路（XHR/fetch 拦截器）？
-  │   ├─ YES + 算法与环境指纹深度绑定（如 a_bogus）
-  │   │   → 优先选路径 B（环境伪装）
-  │   │   → 路径 B 失败时回退路径 A
-  │   └─ YES 但签名逻辑相对独立
-  │       → 路径 A（算法追踪），提取签名函数
-  │
-  ├─ JSVMP 仅生成签名参数（不劫持请求）？
-  │   ├─ Hook 确认使用标准算法 → 路径 A，纯算法还原
-  │   └─ 算法完全自定义 + 环境依赖重 → 路径 B
-  │
-  └─ 无法判断 → 先快速测试路径 B（30 分钟），不行再走路径 A
+├─ JSVMP 是否劫持了请求链路（XHR/fetch 拦截器）？
+│   ├─ YES + 算法与环境指纹深度绑定（如 a_bogus）
+│   │   → 优先选路径 B（环境伪装）
+│   │   → 路径 B 失败时回退路径 A
+│   └─ YES 但签名逻辑相对独立
+│       → 路径 A（算法追踪），提取签名函数
+│
+├─ JSVMP 仅生成签名参数（不劫持请求）？
+│   ├─ Hook 确认使用标准算法 → 路径 A，纯算法还原
+│   └─ 算法完全自定义 + 环境依赖重 → 路径 B
+│
+└─ 无法判断 → 先快速测试路径 B（30 分钟），不行再走路径 A
 ```
 
-#### 反爬类型前置判断
+**反爬类型前置判断**：
 
 ```
 先判断 JSVMP 所在反爬类型：
@@ -375,32 +256,123 @@ MCP 操作：
     → 不是签名型也不是 JSVMP，走混淆还原
 ```
 
-#### 调用链追踪
+**路径 A：算法追踪（四板斧详细步骤）**
 
 ```
-MCP 操作：
-  inject_hook_preset(preset="xhr")    → 一键注入 XHR Hook
-  inject_hook_preset(preset="fetch")  → 一键注入 Fetch Hook
-  reload()                            → 刷新页面触发 Hook
-  get_request_initiator(request_id=N) → 获取 JS 调用栈（黄金路径）
-  → 从调用栈中逐层定位：请求发送 → 参数构造 → 加密函数 → 密钥/明文来源
-  set_breakpoint_via_hook(target_function="加密函数名")
-  get_breakpoint_data()               → 获取捕获的参数、返回值和调用栈
+第一板斧：Hook 出入口（确定 I/O 边界）
+  步骤 0：hook_jsvmp_interpreter → 一键插桩（快速路径，推荐先试）
+  步骤 1：Hook 出口 — inject_hook_preset("xhr", persistent=True) + Cookie Hook
+  步骤 2：Hook 入口 — inject_hook_preset("crypto") + String.fromCharCode
+  → 关联出入口数据，推断签名公式
+
+第二板斧：插桩解释器（追踪执行链路）
+  步骤 3：search_code(keyword='switch', script_url=url, context_chars=500)
+           定位解释器核心分发函数（while-switch 循环）
+  步骤 4：分层 hook_function(function_path=fn, mode='trace', max_captures=N)
+           粗→中→细，逐步缩小范围
+  步骤 5：hook_jsvmp_interpreter(mode='proxy', track_props=True)
+           监控签名容器 + compare_env 采集环境基准
+
+第三板斧：日志分析（从海量数据提取签名链路）
+  步骤 6：instrumentation(action='log') + evaluate_js("window.__mcp_jsvmp_log || []") + get_console_logs
+           → 多维度过滤
+  步骤 7：反向追踪法 — 从已知签名值反向搜索首次出现位置
+  步骤 8：evaluate_js 验证提取的算法，对比签名结果
+
+第四板斧：源码级插桩（通用 VMP 利器，v2.5.0 新增）
+  步骤 9：instrumentation(action='install',
+           url_pattern="**/<VMP文件>", mode="ast", tag="vmp1")
+  步骤 10：instrumentation(action='reload') → 重载让插桩先于 VMP 生效
+  步骤 10.5：验证插桩实际执行（不可跳过）
+           instrumentation(action='status') → 确认 files_rewritten > 0
+           evaluate_js(expression="(() => ({
+             tapInstalled: window.__mcp_tap_installed === true,
+             logReady: Array.isArray(window.__mcp_vmp_log)
+           }))()")
+           → files_rewritten > 0 但 tapInstalled=false：
+             优先判定为改写产物未解析/未执行，不要误判为原始源码 esprima parse 失败
+  步骤 11：instrumentation(action='log', tag_filter="vmp1", type_filter="tap_get")
+           → hot_keys 是 VMP 读取的环境属性 top 30
+  步骤 12：instrumentation(action='log', tag_filter="vmp1", type_filter="tap_method")
+           → hot_methods 是 VMP 调用的方法 top 30
 ```
 
-#### 提取核心逻辑
+**路径 A 还原策略**：
+
+| 情况 | 策略 | 实现方式 |
+|---|---|---|
+| 签名使用标准算法（MD5/HMAC/AES）| 直接用目标语言还原 | Node.js `crypto` / Python `hashlib` + `pycryptodome` |
+| 签名逻辑是标准算法但拼接规则复杂 | 还原拼接逻辑 + 标准算法 | 提取拼接顺序和格式，手动实现 |
+| 签名逻辑完全定制化 | 提取最小 JS 片段执行 | Node.js `vm` 沙箱 / Python `execjs` |
+| VM 劫持了整个请求链路 | 提取 VM 核心 + 最小环境 | 加载完整 VM 文件但只调用签名入口 |
+
+**路径 B：环境伪装（六步法详细步骤）**
 
 ```
-MCP 操作：
-  scripts(action='save', url='<脚本URL>', save_path='./config/target.js')
-  <!-- v3.1.0: migrated from save_script -->
-  → 保存完整脚本
+步骤 1：用 Camoufox 采集真实浏览器完整环境指纹
+  MCP 操作：
+  - launch_browser({headless: false, os_type: "macos", locale: "zh-CN"})
+  - navigate({url: "目标页面", wait_until: "domcontentloaded"})
+  - compare_env → 采集主流环境基准数据
+  - evaluate_js → 分批采集更细粒度的环境值（分 4-5 批次）：
+    批次 A：navigator 属性（24 项）
+    批次 B：screen + window 属性（25 项）
+    批次 C：document + performance + toString + Function.toString（28 项）
+    批次 D：DOM 布局 + Canvas + WebGL + Audio（指纹检测类）
+  ⚠️ 单次 evaluate_js 代码太长会报错，必须分批采集
 
-  手动提取关键函数到 config/encrypt.js
-  用中文注释标注每个函数的作用、输入输出
+步骤 2：在 jsdom 中运行完全相同的采集代码
+  const { JSDOM } = require('jsdom');
+  const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', {
+    url: '目标URL', pretendToBeVisual: true, runScripts: 'dangerously'
+  });
+  const win = dom.window;
+
+步骤 3：逐项 diff，按检测影响分级
+  致命级 — 缺失即被服务端拒绝：
+  · Function.prototype.toString 暴露 jsdom 实现代码
+  · navigator.plugins.length = 0（真实浏览器 = 5）
+  · navigator.webdriver = undefined（应为 false）
+  · document.hasFocus() = false（应为 true）
+  · DOM offsetHeight/Width = 0（应为非零值）
+  高危级 — 可能参与指纹哈希：
+  · Object.prototype.toString 标签错误
+  · window.chrome 对象缺失（仅 Chrome UA）
+  · performance.timing/navigation 缺失
+  · Symbol.toStringTag 不正确
+  中危级 — API 存在性检测（30+ 缺失 API）
+
+步骤 4：编写 patchEnvironment() 全量修复
+  核心修复模块（按优先级排序）：
+  ① markNative 三层防御（WeakSet + 源码正则 + 实例覆写 + 50+ 原型链扫描）
+  ② navigator 补丁（plugins 完整结构 / webdriver / 按 UA 分支决定 userAgentData/connection）
+  ③ window 补丁（chrome 对象按 UA 分支 / 30+ API 存根，每个经 markNative 处理）
+  ④ document + performance 补丁（hasFocus / readyState / timing / navigation）
+  ⑤ DOM 布局属性（offsetHeight/Width/getBoundingClientRect 返回非零值）
+  ⑥ Symbol.toStringTag 全面修复（document→HTMLDocument / screen→Screen）
+
+步骤 5：从 jsdom 内部（win.eval）验证所有检测点通过
+  验证代码必须在 jsdom 的 window 上下文中执行（win.eval）
+
+步骤 6：端到端验证 — 生成签名 → 请求接口 → 返回有效数据
+  - 在 jsdom 中加载完整 JSVMP 脚本并触发签名生成
+  - 用截获的签名值发起真实接口请求
+  - 确认返回有效数据（非空 body / 非错误码）
+  - 连续多次请求验证稳定性（至少 5 次）
+  - ⚠️ 服务端可能静默拒绝（返回 HTTP 200 + 空 body，不报错）
 ```
 
-### 2.2++ 静态分析关键判断清单
+**环境伪装还原策略**：
+
+| 情况 | 策略 | 实现方式 |
+|---|---|---|
+| JSVMP 劫持 XHR，在拦截器中追加签名 | "喂入-截出" | jsdom + XHR Hook → 在 jsdom 内发 XHR，拦截器自动追加签名，Hook 截获 |
+| JSVMP 导出签名函数到 window | 直接调用导出函数 | jsdom 加载 JSVMP → `win.签名函数(参数)` → 获取签名 |
+| JSVMP + 预热初始化（如 SdkGlueInit）| 完整初始化链路 | jsdom 依次加载所有脚本 → 调用初始化函数 → 再触发签名生成 |
+
+详细步骤见 `references/path-a-four-tools.md` 和 `references/path-b-env-emulation.md`。
+
+#### 2.2++ 静态分析关键判断清单
 
 在源码分析阶段，必须确认以下内容：
 
@@ -411,147 +383,258 @@ MCP 操作：
 - [ ] 是否有前置请求（预热接口、Token 获取接口）
 - [ ] 是否有请求链改写（拦截 XHR/fetch 添加签名头）
 
----
+#### 2.3 调用链追踪
 
-## Phase 3：动态验证
+```
+Actions:
+- inject_hook_preset(preset="xhr") → 一键注入 XHR Hook
+- inject_hook_preset(preset="fetch") → 一键注入 Fetch Hook
+- reload() → 刷新页面触发 Hook
+- get_request_initiator(request_id=N) → 获取发起请求的 JS 调用栈（黄金路径）
+- 从调用栈中逐层定位：请求发送 → 参数构造 → 加密函数 → 密钥/明文来源
+```
+
+#### 2.4 提取核心逻辑
+
+```
+Actions:
+- scripts(action='save', url='<脚本URL>', save_path='./config/target.js') → 保存完整脚本
+- 手动提取关键函数到 config/encrypt.js
+- 用中文注释标注每个函数的作用、输入输出
+```
+
+### Phase 3：动态验证
 
 对静态分析的结论，在调试浏览器页面上进行运行时验证。
 
-### 3.1 Hook 注入验证
+#### 3.0 环境指纹采集（路径 B 核心突破点）
+
+> v3.7.0 对齐 MCP v1.6.0 与 Camoufox Reverse reverse.5。默认分析路径不启用
+> 原生追踪；仅在路径 B 确实需要时显式选择定制版。
 
 ```
-MCP 操作：
-  inject_hook_preset(preset="xhr")     → XHR Hook
-  inject_hook_preset(preset="fetch")   → Fetch Hook
-  inject_hook_preset(preset="crypto")  → 加密函数 Hook（btoa/atob/JSON.stringify）
+默认分析路径：
+  launch_browser()  # enable_trace=False，保留官方 active 与正常 sandbox
 
-  hook_function(
-    function_path="自定义目标",
-    hook_code="...",
-    position="before|after|replace"
-  )
-  → 自定义 Hook
+需要 Gecko 原生追踪时：
+  check_environment()
+  → 确认 camoufox.multiversion_supported=True
+  → 从 camoufox_reverse.available_selectors 取得精确 reverse selector
+  → close_browser()（已有浏览器时）
+  → launch_browser(
+      browser_version="<available_selectors 返回的精确 selector>",
+      enable_trace=True
+    )
+  → 必须确认返回 engine_trace.enabled=True
 
-  reload()
-  → 刷新触发 Hook
+交互式追踪窗口：
+  trace_property_access(action="start")
+  → navigate / click / evaluate_js 触发目标行为
+  → trace_property_access(
+      action="stop",
+      mode="summary",
+      collect_values=True
+    )
 
-  get_console_logs()
-  → 读取 Hook 输出
+其他动作：
+  action="query"   → 不停止，读取当前窗口（禁止 collect_values，避免自污染）
+  action="capture" → 新建并阻塞指定 duration 的窗口
+  action="status"  → 查看当前 run 与 native acknowledgement
+  action="clear"   → 只清理当前 launch 的 trace 与 snapshot
+
+不可用时：
+  → compare_env() + 分批 evaluate_js 采集
+  → 与 jsdom 环境全量 diff
 ```
 
-### 3.2 断点与追踪确认
+**页面主世界与 Frame 规则**：
+
+- Camoufox 默认 `page.evaluate` 使用隔离上下文；页面脚本挂到 `window` 的扩展属性
+  可能不可见。默认 `evaluate_js(..., world="isolated")` 保持兼容；确需读取页面
+  自有全局或 Hook 页面函数时，显式使用 `world="main"`。
+- `world="main"` 优先走 Camoufox 原生 `mw:` 通道；原生通道不可用时，MCP 会明确
+  标记 Firefox `wrappedJSObject` 回退，禁止静默退回隔离世界后把 `undefined` 当真实结果。
+- 先用 `get_page_info()` 查看 `frames`，再按需传 `frame_url`、`frame_name` 或当前
+  快照的 `frame_index`。持久 Hook 不得使用易变化的 `frame_index`。
+- 页面函数可能异步挂载。需要跨导航捕获时使用
+  `hook_function(..., persistent=True, world="main")`；返回 `pending` 表示脚本已注册、
+  当前文档尚未安装 Hook，不能当作已经命中。当前等待有上限；必要时调整
+  `wait_timeout_ms`，或通过后续 reload/navigation 让持久脚本重试。
+- 函数 Trace 用 `get_trace_data` 读取，并按需传 `world`、`frame_url`、`frame_name`
+  或 `frame_index`；不要只看 `get_console_logs`。主世界对象与函数由页面控制，
+  参数/返回值仍按不可信数据处理。捕获数量和缓存均有上限，空结果不能单独证明
+  目标函数没有执行。
+- `get_trace_data(clear=True)` 只清理数据，不代表卸载 Hook。持久 Hook 可针对尚未创建的
+  Frame 预注册，`pending_reason="frame_not_found"` 表示等待该 Frame 出现。
+- 主世界通道在执行前探测，执行失败不自动换通道重放；调用可能已产生副作用，先核对页面状态。
+- `remove_hooks()` 应检查 `status`、`warnings` 和 `requires_relaunch`。锁定属性可能无法原位恢复，
+  已注册初始化脚本也无法从现有 BrowserContext 注销；要求彻底移除时关闭并重新启动浏览器。
+  Attach 模式仅重连 MCP 不会销毁外部浏览器，应实际重建外部 BrowserContext 或浏览器。
+
+**证据边界（不可省略）**：
+
+- PropertyTracer 是由当前浏览器声明的**固定原生注入点**组成的 Gecko DOM/Web
+  API 覆盖集（reverse.5 为 77 点，旧兼容构建为 75 点），不是任意
+  SpiderMonkey 属性、JS 对象、VM PC/opcode 或字节码追踪器。
+- 命中是强正证据；未命中不是“未访问”的证明。必须检查
+  `coverage.negative_result_is_conclusive=false`。
+- `possibly_capped=true` 或 `input_truncated=true` 时结果可能不完整。
+- `action="status"` 中 `ack_supported=true` 只表示浏览器支持确认协议；只有
+  `acknowledged=true` 才表示当前所有 live native 进程已实际确认。
+- `query_trace_file` 的 `possibly_capped=null`、`cap_known=false` 表示历史文件
+  没有保存原始事件上限，必须按“未知”处理，不能当成未触发 cap。
+- 历史文件也没有浏览器 capability marker；`coverage.hook_count=null`、
+  `hook_count_known=false` 必须按未知处理，不能套用当前 reverse.5 的 77 点。
+- 它不改写页面 JS 对象、descriptor 或 prototype；高频记录仍可能产生 timing
+  side channel，不能描述为“完全不可检测”。
+- trace 用于确定优先调查对象；不能据此直接认定“只需补这些属性”。
+- `collect_values=True` 仅在 summary 结果上执行追踪结束后的安全 JS 快照。
+  `snapshot_values/values` 不是事件发生时的值；Cookie、Canvas、WebGL、
+  AudioContext 等敏感或有副作用的路径进入 `values_skipped`。
+
+**并存安装规则**：使用 Camoufox Python 0.5+ 和 release 附带的 installer +
+SHA-256，将 reverse.5 安装到 `browsers/whitenightshadow/...`；官方 active 必须与
+reverse build 的完整 version/build 一致。通过 `browser_version` 只为一次 MCP
+launch 选择定制版。不得覆盖/清空缓存、改变持久化 active 或自动迁移 0.4 用户。
+
+#### 3.1 Hook 注入验证
 
 ```
-MCP 操作：
-  set_breakpoint_via_hook(target_function="加密函数路径")
-  → 通过 JS Hook 设置伪断点
+Actions:
+- inject_hook_preset(preset="xhr")     → XHR Hook
+- inject_hook_preset(preset="fetch")   → Fetch Hook
+- inject_hook_preset(preset="crypto")  → 加密函数 Hook（btoa/atob/JSON.stringify）
+- hook_function(function_path="自定义目标", hook_code="...", position="before|after|replace")
+- reload() → 刷新触发 Hook
+- get_console_logs → 读取 Hook 输出
+```
 
-  hook_function(
-    function_path="加密函数路径",
-    mode='trace',
-    log_args=True, log_return=True, log_stack=True
-  )
-  <!-- v3.1.0: migrated from trace_function -->
+#### 3.2 断点与追踪确认
+
+```
+Actions:
+- hook_function(function_path="加密函数路径", mode='trace',
+    log_args=true, log_return=true, log_stack=true)
   → 追踪函数调用（不暂停执行）
 
-  触发目标操作：
-  evaluate_js / click / type_text → 模拟交互
+- 触发目标操作：evaluate_js / click / type_text → 模拟交互
+- get_trace_data → 获取函数追踪数据（指定相同 world/Frame）
 
-  get_breakpoint_data()   → 获取伪断点捕获的参数和返回值
-  get_trace_data()        → 获取函数追踪数据
-
-  重点确认：
-    - 加密算法的具体模式（AES 的 ECB/CBC、填充方式、密钥长度）
-    - 参数拼接顺序和格式
-    - 时间戳精度（秒 vs 毫秒）
-    - 密钥/IV 的来源（硬编码 vs 服务端返回 vs 动态计算）
+重点确认：
+- 加密算法的具体模式（AES 的 ECB/CBC、填充方式、密钥长度）
+- 参数拼接顺序和格式
+- 时间戳精度（秒 vs 毫秒）
+- 密钥/IV 的来源（硬编码 vs 服务端返回 vs 动态计算）
+- 编码方式（hex / base64 / 自定义字符集）
+- 是否有前置依赖（预热请求返回的 token / 动态密钥）
 ```
 
-### 3.3 多次请求对比
+#### 3.3 多次请求对比
 
 ```
-MCP 操作：
-  evaluate_js / click → 触发多次数据请求
-  list_network_requests() → 收集捕获的网络请求
-  → 对比加密参数变化规律，确认变化因子
+Actions:
+- evaluate_js / click → 触发多次数据请求（至少 3 次）
+- list_network_requests → 收集捕获的网络请求
+- 对比加密参数变化规律，确认变化因子：
+  · 哪些参数每次都变（时间戳、随机数、签名值）
+  · 哪些参数固定不变（密钥、版本号、设备 ID）
+  · 变化参数的变化规律（递增 / 随机 / 时间相关）
 ```
 
----
+### Phase 4：算法还原（Node.js / Python）
 
-## Phase 4：算法还原
-
-### 4.1 语言选择策略
+#### 4.1 语言选择策略
 
 | 维度 | 选 Node.js | 选 Python |
-|------|-----------|-----------|
+|---|---|---|
 | 加密逻辑复杂度 | 自定义逻辑可直接用 `vm` 沙箱执行原始 JS | 标准算法可直接用 Python 库还原 |
 | 团队技术栈 | 用户/团队偏好 Node.js | 用户/团队偏好 Python |
 | JSVMP 场景 | VM 沙箱可直接加载整个 VM | 需 `execjs` 桥接 |
-| TLS 指纹需求 | 需额外配置 | `curl_cffi` 一行搞定 |
+| TLS 指纹需求 | 需额外配置 | `curl_cffi` 一行搞定浏览器指纹模拟 |
 
-### 4.2 解法模式选择
+#### 4.2 解法模式选择
 
 | 模式 | 适用场景 | Node.js 模板 | Python 模板 |
-|------|---------|-------------|-------------|
+|---|---|---|---|
 | A: 纯算法还原 | 加密逻辑可完整提取，无浏览器环境依赖 | `templates/node-request/` | `templates/python-request/` |
 | B: 沙箱执行 JS | 服务端返回混淆 JS 用于生成 Cookie/Token | `templates/vm-sandbox/` | `templates/python-request/`（用 `execjs`） |
 | C: WASM 加载还原 | 加密逻辑在 WebAssembly 中实现 | `templates/wasm-loader/` | — |
-| D: 浏览器自动化 | TLS 指纹检测、复杂环境依赖、无法脱离浏览器 | `templates/browser-auto/` | — |
-| E: jsdom 环境伪装 | JSVMP 深度绑定环境指纹、算法不可提取 | jsdom + references/jsdom-env-patches.md | — |
+| D: 浏览器自动化（仅用户明确要求此交付） | 页面交互采集 | `templates/browser-auto/` | — |
+| E: jsdom 环境伪装 | JSVMP 深度绑定环境指纹、算法不可提取 | jsdom + `references/jsdom-env-patches.md` | — |
 
-### 4.3 编码原则
+#### 4.3 编码原则
 
 1. **先通后全**：先成功请求到第 1 页/第 1 条数据，验证加密正确后再扩展
 2. **优先纯算法**：标准算法 Node.js 用 `crypto` / `crypto-js`，Python 用 `hashlib` / `pycryptodome` / `hmac`
-3. **中间值对比**：打印关键中间值（明文、密文、签名），与浏览器抓包值逐一比对
+3. **中间值对比**：打印关键中间值，与浏览器抓包值逐一比对
 4. **配置外置**：密钥、Headers 模板等写入独立配置文件
 5. **错误处理**：包含重试机制、频率控制、异常告警
 6. **逐步验证**：每次只增加一个参数的实现，确保每步可独立验证
 7. **代码可运行**：提供的代码必须是可直接复制运行的，不留占位符
 8. **分析产物持久化**：长参数值、Cookie、JS 代码片段、请求样本等，第一时间写入 `config/` 目录
+9. **环境伪装最小化**：env-patch 只补经 `hook_function(mode='trace')` 证明 JSVMP 真的读了的 API，禁止"先加上保险"
+10. **UA 自洽**：环境补丁的每一项都必须与 `navigator.userAgent` 声明的浏览器一致
 
-### 4.4 配置文件策略
+#### 4.4 配置文件策略
 
-| 产物类型 | 存放位置 | 说明 |
-|---------|---------|------|
-| Cookie 字符串 | `config/cookies.txt` 或 `config/cookies.json` | 完整 Cookie |
-| 长参数样本 | `config/params_sample.json` | 捕获的请求参数样本（含签名值） |
-| 提取的 JS 代码 | `config/sign_logic.js` / `config/encrypt.js` | 签名/加密函数及其依赖 |
-| Headers 模板 | `config/headers.json` | 完整的请求头 |
-| 响应样本 | `config/response_sample.json` | 接口返回的数据样本 |
-| 密文样本 | `config/ciphertext_samples.txt` | 多次请求的加密参数值 |
+| 产物类型 | 存放位置 |
+|---|---|
+| Cookie 字符串 | `config/cookies.txt` 或 `config/cookies.json` |
+| 长参数样本 | `config/params_sample.json` |
+| 提取的 JS 代码 | `config/sign_logic.js` / `config/encrypt.js` |
+| Headers 模板 | `config/headers.json` |
+| 响应样本 | `config/response_sample.json` |
+| 密文样本 | `config/ciphertext_samples.txt` |
 
-**核心原则**：分析过程中产生的任何长文本都应该立即持久化到 `config/` 文件中。后续代码只需「读取文件」而非「内联长字符串」。
+**核心原则**：分析过程中产生的任何长文本，立即持久化到 `config/`。后续代码只需「读取文件」而非「内联长字符串」。
 
----
+#### 4.5 项目结构
 
-## Phase 5：断言驱动交付（v2.9.0 升级）
-
-### 5.1 运行验证
-
+**Node.js 项目**：
 ```
-MCP 操作：
-  1. 运行 main.js / main.py，确认输出正确数据
-  2. 与浏览器实际数据交叉验证（≥ 5 次请求，确认签名稳定性）
-```
-
-### 5.2 写入/更新域级 Session 档案
-
-```
-MCP 操作：
-  a. 将本次分析的断言集写入 assertions.json
-     至少包含：script_exists / anti_crawl_type / cookie_names
-
-  b. 更新 session.json 的 hot_keys_snapshot 和 cookie_attribution_summary
-
-  c. 更新 fingerprint.json（如有新的指纹采集数据）
-
-  d. 更新 assertions_passed / assertions_failed / assertions_total
-
-  e. 输出："域级 Session 档案已更新，N 条断言已写入，下次分析同域时将自动复用"
+project_name/
+├── config/
+│   ├── encrypt.js
+│   ├── keys.json
+│   └── headers.json
+├── utils/
+│   ├── encrypt.js
+│   └── request.js
+├── main.js
+├── package.json
+└── README.md
 ```
 
-### 5.3 生成 README.md
+**Python 项目**：
+```
+project_name/
+├── config/
+│   ├── sign_logic.js
+│   ├── keys.json
+│   └── headers.json
+├── utils/
+│   ├── sign.py
+│   └── request.py
+├── main.py
+├── requirements.txt
+└── README.md
+```
+
+### Phase 5：验证与交付
+
+#### 5.1 运行验证
+
+```
+Actions:
+1. 运行当前任务要求的程序或验证产物：采集结果、独立签名函数或资源文件
+2. 签名/API 任务用代表性新输入与成功/失败样本交叉验证（建议至少 5 次，具体范围遵循任务约定）；资源取证验证字节、哈希和真实调用，不制造无关接口请求
+3. verify_signer_offline(signer_code, samples=[...]) 用真实样本离线验证签名代码
+   - signer_code: JS 代码，evaluating to a function: (sample) => {param: computed_value}
+   - samples: [{id, input, expected}] 从真实请求中提取
+   - 返回 pass_rate + first_divergence 定位首偏差点
+```
+
+#### 5.2 生成 README.md
 
 记录以下内容：
 - 目标信息与接口分析
@@ -559,31 +642,33 @@ MCP 操作：
 - 涉及的签名分析技术点
 - 运行方式与依赖说明
 
-### 5.4 经验沉淀
+#### 5.3 经验沉淀
 
-**主动询问用户是否沉淀经验**到 cases/（按 cases/_template.md 格式）。
+将本次新发现和验证限制记录在需求工作区；具有复用价值时按 `cases/_template.md` 沉淀脱敏案例。用户已授权维护 Skill 时直接更新；发布案例遵循当前任务授权。
 
 沉淀内容包括：
 - 反爬类型判定过程
 - 关键技术点和踩坑记录
 - 已验证的定位路径
 - 环境补丁清单（如走路径 B）
+- 可验证事实清单（5-15 条最小可验证事实）
 
-### 5.5 断言驱动交付清单
+#### 5.4 交付清单
 
 | 交付项 | 必须 | 说明 |
 |--------|------|------|
-| 可运行的 main.js / main.py | ✅ | 纯协议脚本，无浏览器依赖 |
-| config/ 目录 | ✅ | 密钥、Headers、JS 代码等配置 |
+| 当前任务要求的可用产物 | ✅ | 采集程序、签名模块或资源文件，按任务类型选择 |
+| 必要配置与证据 | 按任务 | 数据/签名程序说明配置；资源任务保留来源、哈希和验证记录 |
 | README.md | ✅ | 项目说明 + 接口分析记录 |
-| Session 档案更新 | ✅ | 断言集 + 指纹快照 + Cookie 归因 |
-| cases/ 经验沉淀 | 推荐 | 主动询问用户 |
-| ≥ 5 次请求验证 | ✅ | 确认签名稳定性 |
+| 任务对应的验证 | ✅ | API/签名验证新输入；资源核对字节与调用，不统一要求请求次数 |
+| cases/ 经验沉淀 | 按需 | 脱敏、标注适用版本和验证范围 |
+
+#### 5.5 关闭浏览器
+
+```
+Actions:
+- close_browser()  → 释放浏览器资源
+  ⚠️ 分析完成后必须关闭浏览器，不要让浏览器一直开着占用资源
+```
 
 ---
-
-> **硬约束 Checklist**：SKILL.md 顶部
-> **路径 A 详细操作**：SKILL.md「路径 A：算法追踪（四板斧）」段
-> **路径 B 详细操作**：SKILL.md「路径 B：环境伪装（jsdom/vm 沙箱执行原始 JSVMP）」段
-> **错误处理准则**：SKILL.md「错误处理准则」段
-> **降级梯度表**：SKILL.md「AI 想放弃时的降级梯度表」段

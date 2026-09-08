@@ -17,10 +17,16 @@ class RequestClient:
         headers: Optional[dict] = None,
         max_retries: int = 3,
         retry_delay: float = 2.0,
+        timeout: float = 30.0,
+        retry_non_idempotent: bool = False,
     ):
         self.session = requests.Session()
         self.max_retries = max_retries
+        if max_retries < 1:
+            raise ValueError("max_retries must be at least 1")
         self.retry_delay = retry_delay
+        self.timeout = timeout
+        self.retry_non_idempotent = retry_non_idempotent
 
         default_headers = {
             "User-Agent": (
@@ -30,7 +36,6 @@ class RequestClient:
             ),
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
         }
 
@@ -44,38 +49,31 @@ class RequestClient:
 
     def request(self, method: str, url: str, **kwargs) -> requests.Response:
         """带重试的请求"""
-        last_error = None
-
-        for attempt in range(1, self.max_retries + 1):
+        kwargs.setdefault("timeout", self.timeout)
+        retryable = method.upper() in {"GET", "HEAD", "OPTIONS"} or self.retry_non_idempotent
+        attempts = self.max_retries if retryable else 1
+        for attempt in range(1, attempts + 1):
             try:
                 response = self.session.request(method, url, **kwargs)
-
-                if response.status_code == 429:
-                    wait = self.retry_delay * (2 ** attempt) + random.uniform(0, 1)
-                    print(f"  触发频率限制，等待 {wait:.1f}s 后重试 ({attempt}/{self.max_retries})")
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt == attempts:
+                    raise
+                time.sleep(self.retry_delay * attempt)
+                continue
+            if response.status_code == 429 or response.status_code >= 500:
+                if attempt < attempts:
+                    try:
+                        wait = min(60.0, max(0.0, float(response.headers.get("Retry-After", ""))))
+                    except ValueError:
+                        wait = self.retry_delay * attempt
+                    response.close()
                     time.sleep(wait)
                     continue
+            response.raise_for_status()
+            return response
 
-                if response.status_code in (403, 412):
-                    print(f"  请求被拒绝 ({response.status_code})，可能需要检查 Cookie 或签名")
-                    response.raise_for_status()
-
-                if response.status_code >= 500:
-                    wait = self.retry_delay * attempt + random.uniform(0, 1)
-                    print(f"  服务端错误 ({response.status_code})，等待 {wait:.1f}s 后重试 ({attempt}/{self.max_retries})")
-                    time.sleep(wait)
-                    continue
-
-                return response
-
-            except requests.RequestException as e:
-                last_error = e
-                if attempt < self.max_retries:
-                    wait = self.retry_delay * attempt
-                    print(f"  请求异常: {e}，等待 {wait:.1f}s 后重试 ({attempt}/{self.max_retries})")
-                    time.sleep(wait)
-
-        raise last_error or Exception("请求失败，已达最大重试次数")
+    def close(self):
+        self.session.close()
 
     def get(self, url: str, **kwargs) -> requests.Response:
         return self.request("GET", url, **kwargs)
@@ -93,7 +91,7 @@ class RequestClient:
 
     def set_cookie(self, name: str, value: str, domain: str = ""):
         """设置 Cookie"""
-        self.session.cookies.set(name, value, domain=domain or None)
+        self.session.cookies.set(name, value, **({"domain": domain} if domain else {}))
 
     def update_cookies_from_response(self, response: requests.Response):
         """从响应中更新 Cookie"""

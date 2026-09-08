@@ -47,8 +47,8 @@ while (true) {
 
 **MCP 辅助**：
 ```
-[camoufox-reverse] set_breakpoint_via_hook(target_function="状态机入口函数") → 设置伪断点
-[camoufox-reverse] trace_function(function_path="状态机函数", log_args=true, log_return=true) → 追踪状态转移
+[camoufox-reverse] hook_function(mode='trace', function_path="状态机入口函数") → 设置伪断点
+[camoufox-reverse] hook_function(mode='trace', function_path="状态机函数", log_args=true, log_return=true) → 追踪状态转移
 [camoufox-reverse] get_trace_data → 查看状态值变化
 ```
 
@@ -118,9 +118,9 @@ $=~[];$={___:++$,$$$$:(![]+"")[$],...
 
 **MCP 辅助**：
 ```
-[camoufox-reverse] trace_function(function_path="解释器函数", log_args=true, log_return=true)
+[camoufox-reverse] hook_function(mode='trace', function_path="解释器函数", log_args=true, log_return=true)
 [camoufox-reverse] get_trace_data → 观察每步操作的输入输出
-[camoufox-reverse] set_breakpoint_via_hook(target_function="解释器核心函数") → 捕获关键调用
+[camoufox-reverse] hook_function(mode='trace', function_path="解释器核心函数") → 捕获关键调用
 ```
 
 ### 8. JSVMP（JS 虚拟机保护）
@@ -191,8 +191,8 @@ function deobfuscate(code) {
 ```
 1. save_script → 保存混淆代码到本地
 2. search_code → 搜索可能的入口函数
-3. set_breakpoint_via_hook → 在入口设伪断点
-4. get_breakpoint_data → 查看捕获的参数和返回值
+3. hook_function(mode='trace') → 在入口设伪断点
+4. get_trace_data → 查看捕获的参数和返回值
 5. evaluate_js → 在浏览器执行还原操作
-6. trace_function → 追踪关键函数调用链
+6. hook_function(mode='trace') → 追踪关键函数调用链
 ```

@@ -11,3 +11,9 @@ cases/_session_archives/
 
 # Claude 配置目录
 .claude/
+
+# Local runs and Python caches
+__pycache__/
+*.pyc
+.venv/
+artifacts/

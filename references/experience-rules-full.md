@@ -1,3 +1,5 @@
+> 历史经验整理，仅供背景阅读。现行工具、启动检查与验收约定见 [SKILL.md](../SKILL.md) 和 [common-pitfalls.md](common-pitfalls.md)。历史 Session 名称已停用。
+
 > ⚠️ v3.3.0 起，本文档的核心经验法则（24 条）已回迁到 SKILL.md 核心层。
 > 本文档保留作为深度背景参考，但**以 SKILL.md 为准**。如发现不一致，以 SKILL.md 为准。
 
