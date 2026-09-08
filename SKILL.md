@@ -6,8 +6,8 @@ description: >
   交付可验证的采集程序，支持分页、断点续采和接口改版回归。
   用于自有或已授权接口；微信小程序 wxapkg 解包使用对应小程序技能。
 metadata:
-  version: "3.8.0"
-  mcp-compatible: "1.7.0（旧工作流兼容 1.6.x）"
+  version: "3.9.0"
+  mcp-compatible: "1.8.0（旧工作流兼容 1.6.x / 1.7.x；新参数需对应工具 schema）"
 ---
 
 # 通用采集与签名分析
@@ -76,7 +76,7 @@ MCP v1.7.0 能力（调用前通过当前工具 schema 确认）：
 2. 读 [深度分析流程](references/phase-details.md) 的当前阶段。标准算法优先用 Node/Python 库复现；WASM 先检查 imports/exports；混淆 JS 先定位输入输出与实际调用点。
 3. JSVMP 依据证据选择 [路径 A：算法追踪](references/path-a-four-tools.md) 或 [路径 B：环境复现](references/path-b-env-emulation.md)。SDK 与环境强绑定时先确认签名入口再补环境，避免先堆大量补丁。
 4. 首次观察反爬挑战时尽量不加 Hook，先看响应链。签名对环境敏感时优先源码插桩或较少侵入的模式，用受控对比确认观测是否改变行为；案例里的站点分类只是定位线索。
-5. 源码 `files_rewritten>0` 只说明完成改写，继续检查 runtime 标记、实际日志与当前响应，不能当作脚本已经执行。反混淆/常量折叠先生成独立候选并按 [改写验证](references/transform-validation.md) 比较行为，不能把可读视图当等价代码。
+5. 源码日志由 `instrumentation(action="log")` 从主世界读取，iframe SDK需指定相同Frame；现代语法需要本地Node/随包Acorn，保守降级可能原样跳过。源码 `files_rewritten>0` 只说明完成改写，继续检查 runtime 标记、实际日志与当前响应，不能当作脚本已经执行。反混淆/常量折叠先生成独立候选并按 [改写验证](references/transform-validation.md) 比较行为，不能把可读视图当等价代码。
 6. 最终代码按“原始输入 → 拼接 → 时间/随机值 → 中间值 → 最终签名”定位首个偏差。无法完成时记录事实、已尝试路径与剩余依赖，不伪造签名或成功响应。
 
 场景配方见 [analysis-scenarios.md](references/analysis-scenarios.md)，常见误判见 [common-pitfalls.md](references/common-pitfalls.md)。
@@ -137,6 +137,7 @@ verify_signer_offline(
 | 通用采集、恢复、自定义签名与基线 | [general-collection.md](references/general-collection.md) |
 | 工具参数和兼容边界 | [mcp-tool-reference.md](references/mcp-tool-reference.md) |
 | 深度分析当前阶段 | [phase-details.md](references/phase-details.md) |
+| GitHub真实VM/CFF/加解密/风控/指纹实战 | [real-source-cases.md](references/real-source-cases.md) |
 | JSVMP 路径 A / B | [path-a-four-tools.md](references/path-a-four-tools.md) / [path-b-env-emulation.md](references/path-b-env-emulation.md) |
 | 环境补丁与 UA 一致性 | [jsdom-env-patches.md](references/jsdom-env-patches.md) |
 | 反混淆/改写的语义验证 | [transform-validation.md](references/transform-validation.md) |
@@ -144,6 +145,8 @@ verify_signer_offline(
 | 具体场景与常见误判 | [analysis-scenarios.md](references/analysis-scenarios.md) / [common-pitfalls.md](references/common-pitfalls.md) |
 
 ## 更新记录
+
+- v3.9.0（2026-09-08）：真实开源 VM/CFF/CryptoJS/FingerprintJS 本地案例；公开准备与 MCP 验证脚本；吸收多轮实操的主世界日志、保守插桩、精确字符串、异常 Hook 和原生快照归属经验。
 
 - v3.8.0（2026-09-08）：任务级首检与失效重查；响应文件/请求差异证据；按多轮独立 Agent 反馈完善诊断、哈希单位和分页恢复。
 

@@ -1,10 +1,10 @@
 # 路径 A：算法追踪 — 四板斧完整方法论
 
-> **触发条件**：Phase 2 识别出反爬为签名型/行为型且确认用路径 A 时读此文档
+> **触发条件**：遇到 JSVMP 特征且需要算法追踪时按需阅读
 >
-> **前置要求**：已完成反爬类型三分法识别（见 SKILL.md「反爬类型识别与工具选择」段）
+> **任务检查**：遵循 [task-preflight.md](task-preflight.md)，复用已有证据与首检；案例分类只作线索，验证当前适用性
 >
-> **版本**：v3.6.1（MCP v1.5.1；区分隔离/主世界、JS Proxy 与 Gecko 原生固定点追踪）
+> **版本**：Skill v3.9.0 / MCP v1.8.0（本地现代解析、保守改写、主世界/Frame 日志与证据边界）
 
 ---
 
@@ -12,11 +12,13 @@
 确认 Frame，再对页面函数显式使用 `hook_function(..., world="main")`；跨导航或
 有界等待内的常见赋值式异步挂载函数使用 `persistent=True`。返回 `pending` 只表示
 持久脚本已注册、当前文档尚未安装 Hook；必要时调整 `wait_timeout_ms` 或通过
-reload/navigation 重试，并用触发结果和 `get_trace_data` 确认是否命中。
+目标挂载信号确认状态，并用相同 world/Frame 的 `get_trace_data` 与业务结果确认命中。
+不要因 `pending` 或空日志盲目重放操作；`frame_index` 仅适用于当前快照，持久 Hook 使用
+`frame_url` / `frame_name`。源码日志用 `instrumentation(action="log")`，始终读取所选 Frame 的主世界。
 
 ## 一、四板斧总览
 
-路径 A 的核心方法论是「从 I/O 两端夹逼 + 中间层插桩 + 源码级全量 tap」。
+路径 A 的核心方法论是「从 I/O 两端夹逼 + 中间层插桩 + 选择性源码 tap」。按当前问题选用所需步骤，不要求四斧全部执行。
 
 四板斧的关系：
 - **第一 / 二 / 三板斧**：诊断"VM 看外界"（入口）和"外界看 VM"（出口）——适合签名通过 CryptoJS/atob/MD5 等可 hook 原语走的 VMP
@@ -26,59 +28,58 @@ reload/navigation 重试，并用触发结果和 `get_trace_data` 确认是否�
 
 | 板斧 | 名称 | 工具 | 擅长 | 不擅长 | 适用反爬类型 |
 |------|------|------|------|--------|-------------|
-| 第一斧 | Hook I/O | `inject_hook_preset(xhr/fetch/crypto/cookie)` + `hook_function('X.prototype.Y', mode='intercept', ...)` <!-- v3.1.0: migrated from freeze_prototype --> | 请求链路劫持、动态 Cookie、加密原语入口 | VM 内部自实现的 MD5/AES | 行为型 ✅ / 纯混淆 ✅ / 签名型 ❌ |
-| 第二斧 | 插桩解释器 | `hook_function(path, mode='trace', ...)` + `hook_jsvmp_interpreter(mode='proxy', track_props=True)` | 能识别分发函数名时的调用链追踪 | 匿名 IIFE 包裹 + 高频日志爆炸 | 行为型 ✅ / 纯混淆 ✅ / 签名型 ❌ |
-| 第三斧 | 日志分析 | `evaluate_js("window.__mcp_jsvmp_log || []")` + 反向追踪 | 已能捕获签名值 I/O 时反推公式 | 签名完全不出 VM 的黑箱模式 | 所有类型 ✅（读取已采集日志） |
-| 第四斧 | 源码级插桩 | `instrumentation(action='install', ...)` <!-- v3.1.0: migrated from instrument_jsvmp_source --> + `instrumentation(action='log', ...)` <!-- v3.1.0: migrated from get_instrumentation_log --> | VM 内部调度、"全部在 opcode dispatch 循环里发生"的场景，`hot_keys` 直接暴露环境指纹集 | 极限大文件（5MB+）开销高；改写后必须验证 runtime 已执行 | 所有类型 ✅，**签名型首选** |
+| 第一斧 | Hook I/O | `inject_hook_preset(xhr/fetch/crypto/cookie)` + `hook_function(..., world='main')` | 请求链路、动态 Cookie、加密原语入口 | VM 内部自实现的 MD5/AES | 需验证 Hook 对行为的影响 |
+| 第二斧 | 插桩解释器 | `hook_function(..., mode='trace', world='main')` + 按需解释器探针 | 可定位并可访问函数的调用链 | 闭包内部函数不可直接 Hook；高频日志开销 | 依实际可观测性选择模式 |
+| 第三斧 | 日志分析 | `get_trace_data` / 主世界日志 + 反向追踪 | 从已捕获 I/O 推断公式 | 未捕获的数据、preview 占位与容量限制 | 各类已采集证据均可分析 |
+| 第四斧 | 源码级插桩 | `instrumentation(action=...)` 的 install / log | 所选 VM 内部属性与调用位置 | 语法/语义 skip、体积限制、完整性检测与观测开销 | 各类均需原始/改写对照 |
 
 ### 按反爬类型的适用性
 
 | 反爬类型 | 可用板斧 | 说明 |
 |----------|----------|------|
-| **签名型**（RS / Akamai / Shape） | **仅第四斧** | 前三板斧会改变环境，破坏签名。源码级插桩不动环境，是唯一通用解 |
-| **行为型**（短视频平台 / JY） | **全部四斧** | 不校验浏览器原生性，所有工具可用 |
-| **纯混淆**（obfuscator.io / 自研 VMP） | **全部四斧** | 只是代码难读，不检测观察者 |
+| **签名型**（历史 RS / Akamai / Shape 案例） | 选择性源码插桩、有限运行时观测或环境复现 | 环境和源码完整性都可能被检查，先对照原始行为 |
+| **行为型**（历史短视频平台 / JY 案例） | 按需使用四斧 | 不能据分类推断没有原生性或完整性检测 |
+| **纯混淆**（obfuscator.io / 自研 VMP） | 静态定位与按需动态验证 | 混淆特征不能排除观察者效应 |
 
 ---
 
 ## 二、快速路径（推荐优先试）
 
-> 快速路径足以解决 70%+ 的 RS/Akamai/webmssdk 场景。无法解决时再走手动四板斧流程。
+> 先保留原始产物、成功/失败样本与当前 SDK 基线，再用以下骨架缩小范围。历史站点经验不代表成功率或当前覆盖率。
 
 ### 8 步快速流程
 
 ```
 步骤 1：确认是否 VMP
   search_code(keyword='switch', script_url='<VMP脚本URL>', context_chars=500)
-  <!-- v3.1.0: migrated from find_dispatch_loops -->
-  → case_count > 50 基本确认是 VMP
+  → 核对真实字节码来源、PC/寄存器/堆栈变化与 dispatch 执行证据；case 数量不能单独区分 VM 和控制流平坦化
 
-步骤 2：一键装通用探针
-  hook_jsvmp_interpreter(script_url=<VMP basename>)
+步骤 2：按需装运行时探针
+  hook_jsvmp_interpreter(mode="transparent", persistent=True)
+  → 只在当前问题需要时安装，有限覆盖也需对照原始行为
 
-步骤 3：装出口 Hook
+步骤 3：按需装出口 Hook
   inject_hook_preset("cookie") + inject_hook_preset("xhr", persistent=True)
 
 步骤 4：装源码级插桩（核心）
-  instrumentation(action='install', url_pattern="**/<VMP 文件>", mode="ast", tag="vmp1")
-  <!-- v3.1.0: migrated from instrument_jsvmp_source -->
-  （AST 在 MCP 侧运行，不依赖页面联网）
+  instrumentation(action='install', url_pattern="**/<VMP 文件>", mode="ast", tag="vmp1",
+                  rewrite_calls=False, filter_object_names=["this.bytecode"])
+  （对象路径须替换为当前源码中的静态路径；解析在本地，不依赖页面 CDN）
 
 步骤 5：让所有探针先于 VMP 生效
   instrumentation(action='reload')
-  <!-- v3.1.0: migrated from reload_with_hooks -->
-  → 清日志，获得干净快照
+  → 检查 status、所选 Frame 主世界 runtime 标记和业务结果
 
 步骤 6：触发目标操作
   evaluate_js / click / type_text → 翻页、搜索、登录等
 
-步骤 7：读 hot_keys（30 秒定位环境指纹集）
+步骤 7：读所选位置的 hot_keys
   instrumentation(action='log', tag_filter='vmp1', type_filter='tap_get', limit=300)
-  <!-- v3.1.0: migrated from get_instrumentation_log -->
-  → 看 hot_keys / hot_methods / hot_functions 三个摘要
+  → 检查可能 capped / 返回截断；调用摘要需有意开启 rewrite_calls 并调整过滤范围后另行采样
 
 步骤 8：交叉印证
-  evaluate_js("window.__mcp_jsvmp_log || []") + analyze_cookie_sources()
+  evaluate_js(expression="window.__mcp_jsvmp_log || []", world="main") + analyze_cookie_sources()
+  → iframe SDK 使用同一 Frame；对照当前请求和原始结果，不把属性访问当作参与哈希的证明
 ```
 
 ---
@@ -91,12 +92,12 @@ reload/navigation 重试，并用触发结果和 `get_trace_data` 确认是否�
 
 ### 详细步骤
 
-#### 步骤 0：一键装多路径探针（快速路径，推荐先试）
+#### 步骤 0：按需选择多路径探针
 
 ```
 MCP 操作：
-  hook_jsvmp_interpreter(script_url=<VMP basename>)
-  → 自动覆盖 apply/call/bind + Reflect.*/Proxy 全局对象 + timing/random
+  hook_jsvmp_interpreter(mode="transparent", persistent=True)
+  → 有限运行时观测；确需 proxy 时先做观察者效应对照，不按站点分类直接启用
 ```
 
 #### 步骤 1：Hook 出口 — 请求与 Cookie
@@ -107,9 +108,9 @@ MCP 操作：
   inject_hook_preset("fetch", persistent=True)   → fetch 请求出口
   inject_hook_preset("cookie", persistent=True)  → 原型链级 cookie hook
 
-  hook_function('XMLHttpRequest.prototype.open', mode='intercept', non_overridable=True)
-  <!-- v3.1.0: migrated from freeze_prototype -->
-  → 冻结 XHR.open 防止页面 JS 覆盖 Hook
+  hook_function(function_path='XMLHttpRequest.prototype.open', mode='trace', world='main',
+                log_args=True, max_captures=100, serialization='preview')
+  → 记录调用入口；确需 non_overridable 时先了解锁定属性的卸载边界
 
   analyze_cookie_sources()
   → 辨识每个 Cookie 是 HTTP Set-Cookie / JS document.cookie / 混合写入
@@ -125,7 +126,8 @@ MCP 操作：
   hook_function(
     function_path="String.fromCharCode",
     hook_code="console.log('[MCP] fromCharCode:', JSON.stringify([...arguments]))",
-    position="before"
+    position="before",
+    world="main"
   )
   → 捕获字符编码操作（JSVMP 高频信号）
 ```
@@ -154,9 +156,7 @@ MCP 操作：
 ```
 MCP 操作：
   search_code(keyword='switch', script_url='<VMP脚本URL>', context_chars=500)
-  <!-- v3.1.0: migrated from find_dispatch_loops -->
-  → 定位 case_count > 20 的 switch 语句
-  → case_count > 50 基本确认是 VMP 解释器
+  → 定位候选 switch，结合实际字节码取值、PC 变化和 dispatch 执行中的状态更新确认解释器
 ```
 
 #### 步骤 4：分层追踪函数调用
@@ -167,39 +167,39 @@ MCP 操作（粗粒度 → 中粒度 → 细粒度）：
   # 粗粒度：追踪解释器主函数
   hook_function(
     function_path="<解释器主函数>",
-    mode='trace',
+    mode='trace', world='main', serialization='preview',
     log_args=True, log_return=True, log_stack=False,
     max_captures=100
   )
-  <!-- v3.1.0: migrated from trace_function -->
 
   # 中粒度：追踪子 handler
   hook_function(
     function_path="<子handler函数>",
-    mode='trace',
+    mode='trace', world='main', serialization='preview',
     log_args=True, log_return=True, log_stack=True,
     max_captures=50
   )
-  <!-- v3.1.0: migrated from trace_function -->
 
   # 细粒度：追踪特定加密函数
   hook_function(
     function_path="<加密函数路径>",
-    mode='trace',
+    mode='trace', world='main', serialization='preview',
     log_args=True, log_return=True, log_stack=True,
     max_captures=30
   )
-  <!-- v3.1.0: migrated from trace_function -->
 
   ⚠️ 必须设置 max_captures 限制日志量，高频调用函数（每秒数千次）会爆炸
 ```
+
+以上函数路径必须在所选主世界可访问；闭包中的解释器不能假定挂在 `window`。
+这里显式选择 `serialization="preview"` 避免对象 getter/toJSON；函数 Hook 默认 `json` 为兼容旧用法仍可能有序列化副作用。preview 中对象/函数是占位，需要字段时做受控采样。同步异常核对 `outcome="throw"` / `thrownValue`，Promise 返回的同步完成记录不代表已 settled。
 
 #### 步骤 5：监控签名容器 + 采集环境基准
 
 ```
 MCP 操作：
-  hook_jsvmp_interpreter(mode='proxy', track_props=True)
-  → 监控 navigator.*/screen.*/document.cookie 等签名容器的属性读取
+  hook_jsvmp_interpreter(mode='proxy', track_props=True)  # 仅在对照证据支持使用时
+  → 观察被包装对象的部分读取；可能改变原生性、身份与签名，不能保证全覆盖
 
   compare_env()
   → 采集浏览器环境基准数据（navigator/screen/canvas/WebGL/Audio/timing）
@@ -219,8 +219,8 @@ MCP 操作：
 
 ```
 MCP 操作：
-  get_trace_data()                    → 函数追踪数据
-  evaluate_js("window.__mcp_jsvmp_log || []") → JSVMP 探针日志
+  get_trace_data(world="main")        → 同一 Frame 的函数追踪数据
+  evaluate_js(expression="window.__mcp_jsvmp_log || []", world="main") → JSVMP 探针日志
   get_console_logs()                  → 控制台输出
   get_runtime_probe_log()             → 运行时探针日志
 ```
@@ -244,28 +244,24 @@ MCP 操作：
 
 ```
 MCP 操作：
-  evaluate_js("提取的签名函数(已知输入)")
+  evaluate_js(expression="提取的签名函数(已知输入)", world="main")
   → 对比输出与实际请求中的签名值
-  → 一致则算法提取成功
+  → 一致仅证明该样本匹配；继续验证新输入、状态变化与独立 Node/Python 运行
 ```
 
 ---
 
 ## 六、第四板斧：源码级插桩（通用 VMP 利器）
 
-> **v2.5.0 新增，签名型反爬的唯一通用解法**
+> 闭包内 VM 的补充观测路径，支持范围与验证步骤见 [源码级插桩指南](jsvmp-source-instrumentation.md)。
 
 ### 目标
 
-在 HTTP 层改写 VMP 源码，对每个 `obj[key]` 读取和 `fn(args)` 调用插入 tap，不改变运行时环境。
+在 HTTP 层对支持且被选中的属性读取和调用位置插入 tap。源码、堆栈、耗时与新增全局均可被观察，不能承诺不改变行为或全量等价。
 
 ### 为什么需要第四板斧
 
-前三板斧（Hook/插桩/日志）在以下场景失效：
-- RS 5/6：VM 完全自包含，不路由到可 hook API
-- Akamai sensor_data v2/v3：算法全部在 opcode dispatch 循环内
-- webmssdk：签名逻辑封装在字节码中
-- 这些场景下 `hook_jsvmp_interpreter` 仍然看不到 switch/case 内部的 `opcode_table[code]` 调度
+若关键逻辑封装在字节码分发循环内，且没有经过可 Hook API，前三斧可能只能提供零散 I/O。历史 RS、Akamai、webmssdk 案例可作线索，但是否需要源码插桩，应由当前源码和捕获结果判断。
 
 ### 详细步骤
 
@@ -279,26 +275,30 @@ MCP 操作：
     mode="ast",
     tag="vmp1",
     rewrite_member_access=True,
-    rewrite_calls=True
+    rewrite_calls=False,
+    filter_object_names=["this.bytecode"]  # 示例，按当前源码定位结果替换
   )
-  <!-- v3.1.0: migrated from instrument_jsvmp_source -->
 
   模式选择：
-    - mode="ast"（默认推荐）：MCP 侧 esprima 解析，挑战页可用
-    - mode="regex"：轻量正则改写，只覆盖 bracket member access
-    - 原始源码 AST parse 失败时自动 fallback 到 regex（fallback_on_error=True）
+    - mode="ast"：先用 esprima，失败后本地 Node.js + 随包 Acorn 解析现代语法，无需页面 CDN
+    - mode="regex"：保守 whole-program 子集白名单，仅简单读取/单个初始化声明等输入可改写
+    - 复杂语法整段原样跳过，不在任意 VMP 中做局部正则替换，也不承诺任何覆盖率
 ```
+
+可解析不等于可插桩：可选链、`super`、私有成员等可能跳过相关节点；不支持 construct（`new` / `NewExpression`）事件。检查 `last_parser_backend`、`last_skip_reason`、`last_error`，不把 `files_seen` 当作成功改写。
+
+`filter_property_names` 同时约束属性读取与方法调用；`filter_object_names` 支持 `this.bytecode` 等静态路径，不推断动态对象表达式或运行时别名。显式 `mode="regex"` 配非空 `filter_property_names` / `filter_object_names` 会在安装前被拒绝，并建议改用 `mode="ast"`。AST 失败时，默认 `fallback_on_error=True` 也只在未设置这些过滤器时尝试 regex；回退仍可能原样 skip。
+
+默认 `max_file_size=200000` 字节、`on_oversized="selective"`；大文件没有过滤器时原样跳过。先按当前源码收窄范围并关闭不需要的调用改写，避免因文件大而直接切 regex 或强制全量改写。
 
 #### 步骤 10：让插桩先于 VMP 生效
 
 ```
 MCP 操作：
   instrumentation(action='reload')
-  <!-- v3.1.0: migrated from reload_with_hooks -->
-  → 清空 __mcp_vmp_log / __mcp_jsvmp_log / __mcp_cookie_log
-  → 获得干净的一次执行捕获
+  → 新文档加载已注册的 route / 持久 Hook，仍需核对目标 Frame 和实际执行
 
-  ⚠️ 签名型反爬：不要清 cookie！第一次挑战拿到的 cookie 要留下
+  保留本任务所需鉴权与基线，不因重新采样自动清 Cookie 或 reset
 ```
 
 #### 步骤 10.5：验证改写产物实际执行
@@ -309,113 +309,105 @@ MCP 操作：
   evaluate_js(expression="(() => ({
     tapInstalled: window.__mcp_tap_installed === true,
     logReady: Array.isArray(window.__mcp_vmp_log)
-  }))()")
+  }))()", world="main")
 
 判定：
   - files_rewritten > 0 且 tapInstalled=false
-    → 改写文本已下发，但浏览器未执行；优先怀疑嵌套 AST 节点改写损坏
+    → 先核对目标响应、主世界、Frame 与加载时序，再看浏览器解析/执行异常
   - tapInstalled=true 且日志为空
-    → runtime 已执行；继续检查触发动作和 tag_filter
+    → 只说明该 Frame 存在 runtime 标记；检查目标 VM 触发、tag/filter、skip 和容量
 ```
 
-#### 步骤 11：读取插桩日志（指纹学习的金矿）
+SDK 在 iframe 时，以上 `evaluate_js` 和下面所有 `instrumentation(action="log")` 都指定相同 `frame_url` / `frame_name` / 当前快照的 `frame_index`。`log` 自动读主世界，不接收 `world` 参数。计数是 route 的累计状态，需结合 `last_url` 确认当前目标。
+
+#### 步骤 11：读取插桩日志
 
 ```
 MCP 操作：
 
   # 读取属性访问 hot_keys
   instrumentation(action='log', tag_filter='vmp1', type_filter='tap_get', limit=200)
-  <!-- v3.1.0: migrated from get_instrumentation_log -->
   → summary.hot_keys 告诉你 VMP 读取了哪些属性，按频次倒排
-  → 典型 RS 输出：{"userAgent":120, "plugins":98, "webdriver":77, "cookie":43, ...}
-  → 这就是 VMP 参与签名哈希的完整环境指纹集
+  → 格式示意：{"userAgent":120, "plugins":98, "webdriver":77, "cookie":43, ...}
+  → 非本轮测试结果；仅选择 this.bytecode 时不会自动得到上述宿主环境属性
+  → 仅为已捕获读取分布，需验证哪些值真正影响签名
 
   # 读取方法调用 hot_methods
   instrumentation(action='log', tag_filter='vmp1', type_filter='tap_method', limit=200)
-  <!-- v3.1.0: migrated from get_instrumentation_log -->
-  → summary.hot_methods 格式 ObjectType.methodName
-  → 能否看到 MD5/AES/HMAC 就是算法是否用标准加密的核心判据
+  → summary.hot_methods 格式 typeof.methodName，如 object.MD5
+  → 默认 objType 不识别具体库，结合源码/I/O 确认算法归属
 
   # 读取函数调用 hot_functions
   instrumentation(action='log', tag_filter='vmp1', type_filter='tap_call', limit=200)
-  <!-- v3.1.0: migrated from get_instrumentation_log -->
   → 看有没有 btoa/atob/encodeURIComponent 等熟识函数
 ```
+
+步骤 9 默认关闭调用改写；方法/函数日志需按需求重新安装对应 AST 配置并采样。
+默认源码 preview 对象为 `[object]`、函数为 `[fn]`，primitive 也可能截断；占位不是真实字段或完整 I/O。
+日志返回 `world/frame/execution_backend/warning`；检查 `possibly_capped`（原始缓冲区可能达 20,000 条）与 `truncated`（过滤后的返回量超过 limit）。增大 `limit` 不会补回未采集的事件，空日志或缺失尾部事件不能作否定证据。`clear=True` 清空所选 Frame 的整个源码日志缓冲区，先保存需要的证据。
 
 #### 步骤 12：完工清理
 
 ```
 MCP 操作：
   instrumentation(action='stop', url_pattern="**/<VMP 文件>")
-  <!-- v3.1.0: migrated from stop_instrumentation -->
   → 关闭源码级 route
 ```
 
+停止 route 不会还原当前文档已执行的源码或卸载其他 Hook；恢复基线前先保存证据，按当前 SKILL.md 的生命周期边界处理。
+
 ---
 
-## 七、路径 A 失败模式与降级
+## 七、路径 A 失败诊断与替代路径
 
 ### 常见失败模式
 
 | 失败表现 | 可能原因 | 应对 |
 |----------|----------|------|
-| `files_rewritten > 0` 但 `__mcp_tap_installed=false` | 改写产物未解析/未执行，常见于嵌套 call/member/new 链 | 停止 AST route，按 regex → transparent 降级 |
-| runtime 已安装但 `instrumentation(action='log')` 返回空 | VMP 未触发 / tag_filter 不匹配 | 重新触发业务动作并检查 tag_filter |
-| `hot_keys` 只有 < 5 个属性 | regex 模式覆盖率不足 | 切换 mode="ast" 或增大 context_chars |
-| 签名值始终不一致 | 环境指纹参与哈希但未补齐 | 根据 hot_keys 逐项补齐环境 |
-| `navigate` 反复 412 | 观察者效应——Hook 破坏了签名 | 移除所有 pre_inject_hooks，改用源码级插桩 |
-| AST 模式持续 fallback 到 regex | esprima 无法解析目标语法 | 接受 regex 80% 覆盖率，或退到 transparent 模式 |
+| `files_rewritten > 0` 但 `__mcp_tap_installed=false` | 目标响应、世界/Frame、加载时序或解析/执行问题 | 核对目标上下文与浏览器错误，再对照原始产物 |
+| runtime 标记存在但源码日志为空 | Frame、tag/filter、未触发、skip 或容量限制 | 查所选主世界、业务信号与日志诊断，不自动重放操作 |
+| `hot_keys` 很少 | 所选范围有限、未命中关键位置或观测不完整 | 结合当前源码、skip 和 capped 状态判断，不能按数量断言覆盖不足 |
+| 签名值不一致 | 输入/编码、时间随机值、状态、实现差异或观察者效应 | 按输入到输出定位首个偏差，只补证据支持的环境项 |
+| `navigate` 反复 412 | 挑战流程、鉴权、网络或观测影响等 | 对照无 Hook 基线与响应链，不直接归因于签名或厂商 |
+| AST 失败或 regex 回退后 passthrough | 解析依赖/资源限制、复杂语法不在白名单 | 查 `last_error`、本地 Node/随包 Acorn 与 `last_skip_reason`；保留明确 skip |
+| 显式 regex 搭配非空属性/对象过滤器被拒绝 | regex 无法保留选择范围 | 改用 AST；不要删掉必需过滤器以绕过参数校验 |
+| 改写触发源码完整性校验 | 任何源码变化都可能被检测 | 停止对应 route，评估不改源码的观测方式；轻改写不保证解决 |
 
-### 降级梯度（必须逐级走）
+### 按证据选择下一步
 
-```
-L1: instrumentation(action='install', mode="ast")
-  → status + runtime 标记健康检查失败
-L2: instrumentation(action='install', mode="regex")
-  → 覆盖率不足
-L3: hook_jsvmp_interpreter(mode="transparent")
-  → 日志太少
-L4: hook_jsvmp_interpreter(mode="proxy")    ← 仅行为型/纯混淆可用！
-  → 破坏签名
-L5: 路径 B（jsdom 环境伪装）
-  → 也失败
-L6: 向用户说明情况，建议浏览器自动化或 sdenv
-```
-
-**关键规则**：
-- L1→L2→L3 是标准降级路径，每级必须尝试
-- L3→L4 仅对行为型反爬开放，签名型必须走 L3→L5
-- 到达 L6 前必须在当前 case 记录完整降级路径
-- **禁止从 L1 直接跳到 L6**
+1. 先区分原始产物失败、安装/解析/skip、世界/Frame 错位和改写导致的行为变化；修正相关项即可，不重做全量检查。
+2. 当前目标受 AST 支持时，调整所需过滤范围与调用选项后做对照。只有整个输入满足 regex 白名单且不需要过滤器时才考虑 regex；不能要求机械执行 `ast → regex`。
+3. 源码观测不适用时，可选 `hook_jsvmp_interpreter(mode="transparent")`、可访问函数的 Hook 或已具备能力的原生 trace。`transparent` 不是 instrumentation 模式；JS Proxy 与 Gecko 原生固定点追踪也不是同一种能力，均有证据边界。
+4. 需要完整 SDK/VM 执行且环境强绑定时，转 [路径 B](path-b-env-emulation.md) 的最小环境复现；是否使用 proxy 由当前对照结果决定，不按分类假定安全。
+5. 在现有任务记录写明实际尝试、证据与剩余依赖，沿用用户确认的交付方式。没有必要先尝试已知不适用的每一层，也不要求为失败另建 case 或项目。
 
 ---
 
 ## 八、路径 A 还原策略选择
 
-四板斧完成后，根据收集到的信息选择还原策略：
+根据已收集的证据选择还原策略；不要求四板斧全部执行。方法名、属性数量与 Cookie 来源都是线索，需要当前源码和业务样本支持：
 
 | 情况 | 策略 | 实现方式 |
 |------|------|---------|
 | 签名使用标准算法（MD5/HMAC/AES），JSVMP 日志能看到对应 API 调用 | 纯算法还原 | Node.js `crypto` / Python `hashlib` + `pycryptodome` |
 | 签名逻辑是标准算法但拼接规则复杂 | 还原拼接逻辑 + 标准算法 | 提取拼接顺序和格式，手动实现 |
 | 签名逻辑完全定制化，但 `hot_keys` 清晰暴露输入域 | 提取最小 JS 片段执行 | Node.js `vm` 沙箱 / Python `execjs` |
-| VM 劫持了整个请求链路，`analyze_cookie_sources` 显示 cookie 来自 HTTP Set-Cookie | 纯算法还原不现实 | 转路径 B：jsdom 环境伪装 |
+| VM 接管请求链路，且 Cookie 来源包含 HTTP Set-Cookie | 继续确认服务端初始化与本地签名各自职责 | 先复现协议初始化；SDK 与环境强绑定时考虑路径 B |
 | VM 算法全部内联在 dispatch 循环，即便源码插桩 `hot_keys` 也无法还原 | 加载完整 VM + 最小环境 | 转路径 B：优先 jsdom 运行原始脚本 |
 
 ### 后续还原路径决策
 
-根据 `hot_keys` / `hot_methods` 制定策略：
+以下使用结合源码确认后的调用归属；`hot_methods` 本身只记录 `typeof.method`，不能直接给出完整库路径或证明未出现的算法不存在：
 
 ```
-路径 A-1 — hot_methods 里出现 CryptoJS.MD5 / SubtleCrypto.digest
-  → 纯算法还原
+路径 A-1 — 调用点与 I/O 证实使用 CryptoJS.MD5 / SubtleCrypto.digest 等标准原语
+  → 还原输入编码与拼接后，用标准库验证
 
-路径 A-2 — hot_methods 里全是自定义 fn 名
-  → 提取 VMP 子片段 + Node.js vm 沙箱运行
+路径 A-2 — hot_functions 的自定义函数与源码定位到可提取的子片段
+  → 提取后在 Node.js vm 验证结果、异常和状态变化
 
-路径 B — hot_keys 里环境指纹很多（navigator/screen/webgl 40+）
-         + analyze_cookie_sources 显示 cookie 来自 HTTP Set-Cookie
-  → 走 jsdom 环境伪装（见 SKILL.md 路径 B 段或 references/jsdom-env-patches.md）
+路径 B — 对照证据显示 SDK 与环境强绑定、难以隔离签名函数
+  → 按 path-b-env-emulation.md 复现最小环境，并独立处理协议 Cookie 来源
 ```
 
 ---
@@ -424,16 +416,20 @@ L6: 向用户说明情况，建议浏览器自动化或 sdenv
 
 1. **VM 解释器本身不是目标，签名函数的 I/O 才是目标** — 不要试图反编译字节码
 2. **先 Hook 出口确定"要什么"，再 Hook 入口确定"给了什么"** — 出口驱动分析
-3. **`hook_function(path, mode='trace', ...)` 对高频调用函数日志量可能爆炸** <!-- v3.1.0: migrated from trace_function --> — 必须设置 `max_captures` 限制
+3. **`hook_function(path, mode='trace', ...)` 对高频调用函数日志量可能爆炸** — 必须设置 `max_captures` 限制
 4. **`get_trace_data` 返回的海量数据需要本地过滤** — 用反向追踪法效率最高
-5. **`instrumentation(action='install', mode="regex")` 对带模板字符串、正则字面量的代码可能误改写** <!-- v3.1.0: migrated from instrument_jsvmp_source --> — AST 具备语法感知，但仍必须验证改写产物已执行
-6. **前三板斧对签名型反爬不可用** — Hook `Function.prototype.apply` 会改变 toString 原生性；Proxy 在 navigator 上会被检测
+5. **regex 是保守 whole-program 白名单** — 模板字符串、正则字面量、调用等复杂语法整段原样跳过；AST 解析成功也不代表所有节点均能改写或产物已执行
+6. **所有探针都需评估观察者效应** — Hook/Proxy 可改变原生性与对象身份；源码 tap 可被完整性、堆栈与耗时检测，不能承诺轻改写解决
 7. **`dump_jsvmp_strings` 前提是字符串未被动态解密** — 看到 `decoded_strings` 全是单字母乱码就是加密的
-8. **`search_code(keyword='while')` 在超大文件（380KB+）会返回大量无关结果** — 应使用 `search_code(keyword, script_url=url)` <!-- v3.1.0: migrated from search_code_in_script --> 配合更精确关键词
-9. **源码级插桩会在 MCP 内部按 URL 缓存改写结果** — 当前统一接口不需要传缓存参数
+8. **`search_code(keyword='while')` 在超大文件（380KB+）会返回大量无关结果** — 应使用 `search_code(keyword, script_url=url)` 配合更精确关键词
+9. **源码改写缓存会核对当前响应内容哈希** — 同 URL 的 SDK 更新不能沿用旧文本；仍需核对当前目标的 status 与运行证据
+10. **日志只支持已捕获范围内的结论** — 主世界/Frame、preview 占位、skip 与 possibly_capped 都影响解释；不能把空结果当未执行或把本地样本通过当商业站点成功
 
 ---
 
-> **完整工作流参考**：SKILL.md「Phase 2.2+ JSVMP 专项分析」段
-> **源码级插桩专项指南**：references/jsvmp-source-instrumentation.md
-> **经验案例**：cases/universal-vmp-source-instrumentation.md
+按当前需要阅读：
+
+- [SKILL.md](../SKILL.md)：当前通用流程与交付约定
+- [源码级插桩专项指南](jsvmp-source-instrumentation.md)：参数、健康检查和日志边界
+- [骨架案例](../cases/universal-vmp-source-instrumentation.md)：历史线索，需当前适用性验证
+- [真实上游本地案例](../references/real-source-cases.md) 与 [准备/验证脚本说明](../scripts/real_cases/README.md)：来源、复现方法与本地验证边界

@@ -1,8 +1,19 @@
-# MCP v1.7.0 工具契约
+# MCP v1.8.0 工具契约
 
-配套 Skill v3.8.0。完整参数快照见 [mcp-tools.json](mcp-tools.json)，实际执行时优先读取已安装 MCP 的工具定义。不要将快照的新参数发送给旧版本。
+配套 Skill v3.9.0。完整参数快照见 [mcp-tools.json](mcp-tools.json)，实际执行时优先读取已安装 MCP 的工具定义。不要将快照的新参数发送给旧版本。
 
-## 本轮新增与兼容行为
+## v1.8.0 观测与返回契约
+
+| 工具 | 新能力/修复 | 兼容说明 |
+|---|---|---|
+| instrumentation | 主世界/Frame 日志、method/静态对象过滤、当前响应缓存、解析与跳过诊断 | AST 现代语法可选本地 Node/随包 Acorn；regex 非空过滤会明确拒绝；对象预览为占位 |
+| evaluate_js | result_format=json_ascii 返回未清洗的 ASCII JSON 文本 | 默认 auto 保留；特殊数字/undefined 先标签化；失败不自动重放 |
+| hook_function | serialization=preview 减少对象采样副作用；outcome/thrownValue/completion | 默认 json 保留；同步返回 Promise 不等于异步完成，clear 不重置捕获计数 |
+| trace_property_access | snapshot_context 明确当前页主 Frame、隔离世界、非事件归属 | collect_values 仍是 stop 后快照，原生覆盖边界不变 |
+
+实操与边界见 [真实源码案例](real-source-cases.md)。
+
+## v1.6 / v1.7 新增与兼容行为
 
 | 工具 | 新能力/修复 | 兼容说明 |
 |---|---|---|

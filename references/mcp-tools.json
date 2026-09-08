@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "mcp_version": "1.7.0",
+  "mcp_version": "1.8.0",
   "tools": [
     {
       "name": "check_environment",
@@ -150,6 +150,11 @@
           "frame_index": {
             "type": "integer",
             "title": "Frame Index"
+          },
+          "result_format": {
+            "default": "auto",
+            "title": "Result Format",
+            "type": "string"
           }
         },
         "required": [
@@ -418,6 +423,11 @@
           "frame_index": {
             "type": "integer",
             "title": "Frame Index"
+          },
+          "serialization": {
+            "default": "json",
+            "title": "Serialization",
+            "type": "string"
           }
         },
         "required": [
@@ -623,6 +633,18 @@
             "default": false,
             "title": "Include Source Site",
             "type": "boolean"
+          },
+          "frame_url": {
+            "type": "string",
+            "title": "Frame Url"
+          },
+          "frame_name": {
+            "type": "string",
+            "title": "Frame Name"
+          },
+          "frame_index": {
+            "type": "integer",
+            "title": "Frame Index"
           }
         },
         "required": [

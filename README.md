@@ -1,6 +1,14 @@
 # JS 逆向分析 Skill
 
-面向 Web 逆向分析与接口签名还原场景的 Skill，围绕 `camoufox-reverse` MCP 构建单一工作流：先用 Camoufox 反检测浏览器完成网络捕获、源码定位、Hook 调试与反检测验证，再按需落地到 Node.js 或 Python 算法还原与自动化调用。
+面向 Web API 通用采集、接口签名分析与改版回归的 Skill。已有协议与样本时直接验证 Node.js/Python 调用；需要页面取证时使用 Camoufox MCP 捕获网络、定位源码和调试 Hook，再交付可验证的采集程序。
+
+## v3.9.0：真实开源案例与实操反馈
+
+- 可重复准备 KProtect VM、javascript-obfuscator CFF、CryptoJS/FingerprintJS，并通过真实 MCP 验证原始/插桩、加解密及原生 trace。
+- 对齐 MCP v1.8.0 的主世界/Frame 日志、现代语法解析、保守改写、精确 Unicode 返回及同步异常 Hook。
+- 延续“任务首次检查、后续复用、变化时局部复查”，移除旧索引重复扫描和未经验证的覆盖率描述。
+
+见 [v3.9.0](docs/releases/v3.9.0.md)、[实战经验](references/real-source-cases.md)、[准备与复现](scripts/real_cases/README.md)。
 
 ## v3.8.0：任务级检查与多轮实操迭代
 
@@ -286,6 +294,7 @@ python main.py
 
 | 版本 | 日期 | 要点 |
 |------|------|------|
+| v3.9.0 | 2026-09-08 | 真实开源案例公开复现、现代解析/低副作用观测、精确数据与独立Agent复验 |
 | v3.8.0 | 2026-09-08 | 公开方案研究、任务级检查、三轮Agent实操反馈、证据诊断与可选分页恢复增强 |
 | v3.7.0 | 2026-09-07 | 通用采集与断点恢复、独立验签、模板修复、三平台 CI 和契约基线 |
 | v3.6.1 | 2026-09-07 | 对齐 MCP v1.5.1：补充 Trace 清理、未来 Frame 预注册、执行失败不重放和 Hook 卸载边界 |

@@ -1,6 +1,6 @@
 # JSVMP 源码级插桩专项指南（第四板斧）
 
-> **v2.5.0 新增文档，v3.6.1 对齐 MCP v1.5.1**。当前执行接口以 `instrumentation(action=...)` 为准；文中的旧工具名只用于解释能力来源。
+> **Skill v3.9.0 / MCP v1.8.0**。当前执行接口以 `instrumentation(action=...)` 为准；旧版 MCP 调用前检查实际工具 schema。
 >
 > 与 `jsvmp-analysis.md` 的第一/二/三板斧互补——前三板斧诊断"VM 看外界 / 外界看 VM"，本文档讲解"VM 看自己"。
 
@@ -10,7 +10,7 @@
 
 ### 1.1 传统 hook 的盲区
 
-**`hook_jsvmp_interpreter`** 即使升级到 v0.4.0 的多路径版本（apply/call/bind + Reflect.*/Proxy 全局对象 + timing/random），仍然只能看到 VMP 路由到**可 hook JS API** 的部分。但RS 5/6、Akamai sensor_data v2/v3、webmssdk（短视频平台）、obfuscator.io 这类 VMP 的典型结构是：
+**`hook_jsvmp_interpreter`** 等运行时探针只能观察其已包装路径。若 VMP 的关键计算未经过这些 API，就需要其他证据。以下是用于说明盲区的自写 VM 骨架，不是真实上游解释器或某站点的验证产物：
 
 ```js
 // 典型的自包含 VMP 字节码分发循环
@@ -32,99 +32,88 @@ function _vm(bytecode) {
 
 - `case 1` 直接访问 `env[key]`，hook `navigator`/`screen` 的 Proxy 能看到（如果 env 是被 Proxy 的全局），但嵌套多层后 Proxy 链会断。
 - `case 2` 读任意对象的任意属性——hook 不可能覆盖所有对象。
-- `case 4` 纯内存里的字符串拼接，任何 hook 都看不到。
+- `case 4` 的纯字符串拼接不会经过上述 API Hook，可能只能从周边输入输出推断。
 
-**结果**：VMP 生成签名需要的关键中间值在 dispatch 循环内部全部丢失，传统 hook 返回的日志里只有零散的 API 调用，无法拼出算法。
+**结果**：传统 API Hook 可能只提供零散调用，不足以还原 dispatch 循环中的关键中间值。源码 tap 可以补充受支持位置的证据，仍不等于逐 opcode 追踪。
 
 ### 1.2 源码级插桩的原理
 
-**`instrument_jsvmp_source`** 在 HTTP 层拦截目标脚本，在脚本抵达浏览器前把源码改写成等价的"带 tap 的版本"：
+**`instrumentation(action="install")`** 在 HTTP 层拦截目标脚本，在支持且被选中的源码位置插入 tap。以下为改写形态示意，不能据此承诺任意脚本的语义等价：
 
 ```js
 // 改写前
-stack.push(env[key]);
+var value = env[key];
 
 // 改写后（regex 模式）
-stack.push(__mcp_tap_get(env, key, 'vmp1'));
+var value = __mcp_tap_get(env, key, 'vmp1');
 
 // 改写前
-fn.apply(null, args);
+obj.method(arg);
 
 // 改写后（AST 模式）
-__mcp_tap_call(fn, null, [args[0], args[1], ...], 'vmp1');
+__mcp_prepare_method(obj, 'method', 'vmp1')([arg]);
 ```
 
-`__mcp_tap_get` / `__mcp_tap_call` / `__mcp_tap_method` 三个运行时函数会把每次访问记录到 `window.__mcp_vmp_log`，包括：
+运行时将选中位置的事件写入当前 Frame 主世界的 `window.__mcp_vmp_log`。方法调用先读取方法，再求值参数，以保留该顺序与 `this`。主要事件包括：
 
 - **tap_get**: 读取属性——`{type, tag, key, objType, value (preview)}`
 - **tap_method**: `obj.method(args)` 调用——`{type, tag, objType, method, argc, arg0, ret}`
 - **tap_call**: `fn(args)` 直接调用——`{type, tag, name, argc, arg0, ret}`
-- **tap_call_err**: 调用抛错——`{type, tag, name, err}`
+- **tap_call_err**: 直接函数调用同步抛错——`{type, tag, name, err}`；不能据此假定所有属性读取、方法抛错或异步拒绝都有错误事件
 
-改写后的源码**继续正常执行**——VMP 照跑不误，但每一次对宿主环境或对象的交互都被记录。
+默认日志只做 primitive preview，长值可能截断；对象为 `[object]`、函数为 `[fn]`，不枚举字段或调用对象的 getter/toJSON。这些占位不是完整 I/O，`objType` 也只是 `typeof`，不能据此识别对象所属的库。需要对象字段时另做明确、受控的采样；精确字符串可用 `evaluate_js(..., world="main", result_format="json_ascii")` 后本地解码，特殊数值等先显式标签化。
+
+源码、堆栈、耗时和新增的 MCP 全局名称仍可被观察。先运行原始产物作为基线，再比较改写后的结果、异常、参数/状态副作用、`this` 和随机源调用次数；不承诺全量覆盖、不可检测或全程序等价。
 
 ---
 
 ## 2. 两种改写模式：regex vs AST
 
-`instrument_jsvmp_source(mode=...)` 支持两种模式：
+`instrumentation(action="install", mode=...)` 支持两种模式，均无覆盖率承诺。
 
-### 2.1 `mode="regex"`（轻量兜底，零依赖）
+### 2.1 `mode="regex"`（无依赖的保守子集）
 
-- **原理**：纯正则匹配 `<identifier>[<expr>]`，替换为 `__mcp_tap_get(identifier, expr, tag)`
-- **优点**：无外部 CDN 依赖，页面离线也能用；速度极快；大文件安全（10MB+ VMP 也能秒级改写）
-- **覆盖率**：~80% 的 member access；**不覆盖函数调用 tap**（只改写 `obj[key]`，不改写 `fn(args)`）
-- **局限**：对带模板字符串、正则字面量、嵌套方括号的代码可能误改写；只改 member access，不改 call
-- **使用场景**：
-  - 极限大文件（AST 模式内存超限）
-  - 快速扫一遍看看 hot_keys 分布
+- **whole-program 白名单**：先检查整个程序是否由受支持的简单读取、字面量/标识符表达式或单个带初始化的变量声明组成，再改写合格的 `identifier[key]`。key 只接受受支持的简单标识符、字符串或整数形式，不是任意表达式。
+- **整段原样跳过**：调用、赋值目标、运算符、函数/循环、模板字符串、正则字面量、嵌套方括号等复杂语法不在白名单中；不会在复杂 VMP 中搜出局部片段强改。跳过时不注入 runtime，检查 `last_skip_reason="unsupported_program_syntax"`。
+- **只有属性读取 tap**：不生成 `tap_method` / `tap_call`，也不支持 construct（`new` 构造调用）观测。显式 `mode="regex"` 搭配非空 `filter_property_names` 或 `filter_object_names` 会在安装前明确拒绝并建议使用 `mode="ast"`，不会忽略过滤器继续安装。
+- **适用范围**：已确认整个输入属于白名单的小型简单脚本。文件大、AST 失败或现代语法出现，都不是改用 regex 的充分理由。
 
-### 2.2 `mode="ast"`（默认，MCP 侧 esprima）
+### 2.2 `mode="ast"`（默认，本地解析）
 
-- **原理**：在 MCP 进程中用 esprima-python 解析源码为 AST，识别 `MemberExpression` / `CallExpression` 后插入 tap
-- **优点**：同时改写 member access 和 call；不会把字符串字面量或正则内容当作代码节点
-- **依赖**：不依赖页面 CDN；esprima 仅覆盖其支持的 JavaScript 语法版本
-- **使用场景**：
-  - 绝大多数场景（默认推荐）
-  - 需要 `hot_methods` / `hot_functions` 数据（只有 AST 模式会生成）
-- **失败回退**：原始源码解析失败时可自动回落 regex；`last_mode_used="ast"` 不代表改写产物已经在浏览器成功执行
+- **解析链路**：MCP 侧先用 esprima-python；其无法解析时，由本地 Node.js 调用随 MCP 打包的 Acorn 处理现代语法。无需页面 CDN，也不执行输入源码。缺少依赖、超过解析资源限制或仍解析失败时查看诊断。
+- **改写范围**：在支持的 `MemberExpression` / `CallExpression` 位置插桩；解析成功不等于每个 construct 都支持改写。可选链、`super`、私有成员等有语义边界，可能跳过相关节点；不提供 `new` / `NewExpression` 的 construct 事件，不能把普通调用 tap 当作构造调用记录。
+- **选择性改写**：`filter_property_names` 同时约束属性读取与方法调用；`filter_object_names` 匹配静态对象路径，支持 `this.bytecode`，不解析动态对象表达式或推断运行时别名。动态 key 也不能当成已知属性名匹配。
+- **有条件回退**：默认 `fallback_on_error=True` 仅在 AST 失败且未设置上述过滤器时尝试 regex；有过滤器时不自动改成无过滤的 regex。尝试回退仍可能原样跳过，不保证产生 tap。可设为 `False` 保留 AST 失败诊断。
 
-> **v0.5.0 变化**：`mode="ast"` 的实现从 v0.4.x 的"页面内加载 acorn CDN"改为
-> **MCP 侧 esprima-python 解析**。这意味着：
-> - 挑战页（RS 412、Akamai sensor_data 挑战等）上 AST 模式**能用了**（旧实现因 CDN 被挑战拦住会静默失败）
-> - 零 JS 依赖，`instrumentation(action="install")` 的 AST 模式现在**应成为默认选择**
-> - 新增 `fallback_on_error=True`，esprima 解析失败时自动回落 regex
+历史页面内 Acorn CDN 实现不是当前工具的执行路径；现代解析需要本地 Node.js，不能沿用“零 JS 依赖”的描述。
 
 ### 2.3 选择建议
 
 | 情况 | 选 | 原因 |
 |------|-----|-----|
-| 首次分析某个 VMP | **AST** | `hot_methods` + `hot_functions` 能快速画出 VMP 行为画像 |
-| 只需快速观察 bracket member access | regex | 改写轻、无需 AST |
-| VMP 文件 > 5 MB | regex | AST 改写内存开销大 |
+| 首次分析某个 VMP | **选择性 AST** | 先按当前源码定位属性，使用 `rewrite_calls=False`，需要调用证据时再扩大 |
+| 整个脚本属于 regex 白名单，只需 bracket 读取 | regex | 无解析器依赖，仍需对照验证 |
+| 大文件 | **选择性 AST 或保留原文** | 默认 `max_file_size=200000` 字节，`on_oversized="selective"` 无过滤器时跳过；不因体积直接换 regex |
 | 关心 VMP 调了哪些方法 | **AST** | regex 不生成 tap_method / tap_call |
-| 关心 VMP 读了哪些属性 | 任一 | 两种模式都生成 tap_get |
+| 关心 VMP 读了哪些属性 | 通常 AST | 两种模式的语法范围不同，日志只说明实际捕获的读取 |
 
 ---
 
-## AST 模式健康诊断（v2.6.0 新增）
+## 改写状态与运行时健康诊断
 
 启用 `instrumentation(action="install", mode="ast")` 后，先通过
-`instrumentation(action="status")` 的 `active_patterns[i].last_mode_used` 判断改写路径：
+`instrumentation(action="status")` 的 `active_patterns[i]` 核对目标 `last_url`、计数和诊断；计数是累计值，`last_*` 描述最近处理状态，不能拿其他脚本的成功代替当前目标：
 
 | `last_mode_used` | 含义 | 动作 |
 |---|---|---|
-| `"ast"` | 原始源码解析成功并完成 AST 改写 | 继续做运行时健康检查 |
-| `"regex"` | 你显式指定了 `mode="regex"` | 正常，继续 |
-| `"regex (fallback)"` | `mode="ast"` 但 esprima 解析失败，自动回落 regex | **警告**：看下文 |
+| `"ast"` | 生成 AST 改写文本，或命中该内容的改写缓存 | 查看 `last_parser_backend`，继续做运行时健康检查 |
+| `"regex"` | 显式 regex 模式产生了改写文本 | 只代表白名单中的读取被改写 |
+| `"regex (fallback)"` | AST 失败后，regex 白名单产生了改写 | 查看 `last_error`，评估有限证据是否满足目标 |
+| `"passthrough"` | 原文透传，未产生合格改写 | 查看 `last_skip_reason` 和 `last_error` |
 
-`"regex (fallback)"` 持续出现时：
+`files_seen` 只是 route 看到了响应；`files_passed_through` 表示透传次数。常见跳过原因包括 `unsupported_program_syntax`、`no_eligible_rewrites`、`oversized_without_selected_properties`、`oversized` 和 `non_success_response`。后者还应核对响应状态；只读 `last_mode_used` 可能看到之前请求的模式。
 
-1. 先 `get_console_logs` 里搜 `[INSTRUMENT] AST parse failed`，看具体报错
-2. 如果是 ES2022+ 的 private field / static block / top-level await 等新语法 → 手动 `mode="regex"`（~80% 覆盖）或 `mode="transparent"`（runtime 观察）兜底
-3. 如果是 `SyntaxError: Unexpected token` 开头 → 可能 JS 被加了 BOM 或非标准前缀，可以本地用 `curl` 下来手动检查首 100 字节
-
-一般来说，RS sdenv*.js / Akamai acmescripts*.js / webmssdk 都能被 esprima 解析。如果出现持续 fallback，报告给 MCP 仓库 issue 区。
+解析失败先看 `last_error`，核对原始响应确为 JS、esprima/本地 Node/随包 Acorn 是否可用及资源限制。必要时保存已捕获的原始响应核对；不要无证据删除 BOM/前缀或反复重放请求。语法能解析但目标节点不支持时，保留 skip，选择其他可观察位置或运行时方案。
 
 ### 改写产物运行时健康检查
 
@@ -136,27 +125,30 @@ instrumentation(action="status")
 evaluate_js(expression="(() => ({
   tapInstalled: window.__mcp_tap_installed === true,
   logReady: Array.isArray(window.__mcp_vmp_log)
-}))()")
+}))()", world="main")
 instrumentation(action="log", tag_filter="vmp1", limit=10)
 ```
 
+上述示例读取当前页主 Frame。SDK 在 iframe 中时，先用 `get_page_info().frames` 确认目标，在 `evaluate_js` 与 `instrumentation(action="log")` 中指定相同 `frame_url` / `frame_name`；`frame_index` 只适用于当前快照。`log` 自动读所选 Frame 的主世界，不传 `world` 参数。
+
 判定：
 
-- `files_rewritten > 0` 且 `tapInstalled=false`：优先怀疑改写产物语法损坏或执行前异常。常见触发结构是嵌套 `CallExpression` / `MemberExpression` / `NewExpression`，不是原始源码 parse 失败。
-- `tapInstalled=true` 但日志为空：runtime 已执行，继续检查 VMP 是否触发、tag/filter 是否正确，不要把空日志直接归因于语法错误。
-- 确认改写产物失败后，先停止原 AST route，再按 `ast → regex → transparent` 梯度重装；不要通过持续增大 `max_rewrites` 反复下发同一份失败产物。
+- `files_rewritten > 0` 且 `tapInstalled=false`：先核对世界、Frame、目标响应与加载时序，再检查浏览器解析/执行错误；不能仅凭标记缺失断定 AST 损坏。
+- `tapInstalled=true` 但日志为空：只证明该 Frame 的 runtime 标记存在，未证明目标 VM 已运行；检查业务完成信号、tag/filter、skip 和容量，不盲目重放业务动作。
+- 确认改写改变行为后，停止对应 route，对照原始产物定位影响。仅在输入满足 regex 白名单时才考虑它；完整性校验可能拒绝任何源码变化，轻改写不能保证解决。可选 `hook_jsvmp_interpreter(mode="transparent")` 等运行时观测，但仍需对照验证；`transparent` 不是 instrumentation 的模式。
 
 ---
 
-## 3. 黄金 8 步流程
+## 3. 按需操作骨架（8 步）
 
-> 这是面向RS 5/6、Akamai sensor_data、webmssdk、obfuscator.io 的通用流程。照抄 `Actions` 段即可，执行方需要替换的只有 `url_pattern` 和 `script_url`。
+> 以下是按证据选取的操作骨架；站点名称仅为历史线索。首次检查与续做复用遵循 [任务级检查](task-preflight.md)，无需为每个步骤重做环境或案例审查。根据当前源码、Frame 和业务状态调整参数与探针。
 
 ### Step 1 — 启动 + 网络捕获
 
 ```
 Actions:
-  launch_browser(headless=False)   # 有头调试，看浏览器行为
+  # 新浏览器分析任务先 check_environment()；同任务已有环境则复用
+  launch_browser(headless=False)   # 需要新建本任务浏览器时执行
   network_capture(action='start', capture_body=True)   # 抓响应体，后续 analyze_cookie_sources 需要
 ```
 
@@ -166,71 +158,59 @@ Actions:
 Actions:
   navigate(url="https://target.com/", wait_until="load")
   list_network_requests(resource_type="script")
-  → 找 size 最大的 JS（通常 100KB+，名字像 sdenv-*.js / FuckCookie_*.js / webmssdk.es5.js / akam/xxx.js）
+  → 结合请求发起栈、文件名与源码定位候选；体积大不等于 VMP
   → 记下 url，下面称为 <VMP_URL>
 ```
 
-### Step 3 — 确认是 VMP（而不是普通混淆）
+### Step 3 — 核对 VM 结构
 
 ```
 Actions:
-  find_dispatch_loops(script_url="<VMP_URL>", min_case_count=20)
-  → 返回：
-    {
-      "candidates": [
-        {"fn_name": "_0xabc", "case_count": 87, "char_range": [45321, 182400], "preview": "..."}
-      ],
-      "total": 1,
-      "source_length": 382112
-    }
-  → case_count > 50 基本确认是 VMP
-  → 记下 fn_name 和 char_range（后续定位方便）
+  search_code(keyword="switch", script_url="<VMP_URL>", context_chars=500)
+  → 结合真实字节码来源、PC 更新、寄存器/堆栈变化和 dispatch 执行证据确认 VM
+  → case 数量与 while-switch 只是线索，控制流平坦化也可能有类似结构
+  → 记下当前源码位置与所需观测属性（后续选择性插桩）
 ```
 
 ### Step 4 — 装源码级插桩（核心）
 
 ```
 Actions:
-  instrument_jsvmp_source(
+  instrumentation(
+    action="install",
     url_pattern="**/sdenv-*.js",       # glob 模式，匹配所有 CDN hash 变种
-    mode="ast",                         # 联网优先 ast
+    mode="ast",                         # 本地解析，不依赖页面联网
     tag="vmp1",                         # 一次插桩多 VMP 时区分
     rewrite_member_access=True,
-    rewrite_calls=True,
+    rewrite_calls=False,                # 先看所选读取，需要方法事件时再打开
+    filter_object_names=["this.bytecode"],  # 示例：替换为当前源码中的静态对象路径
     max_rewrites=5000
   )
   → 返回：{"status": "instrumenting", "pattern": "...", "mode": "ast", "tag": "vmp1"}
 ```
 
-### Step 5 — 装兜底 hook（与源码插桩互补）
+### Step 5 — 按需增加互补 Hook
+
+只安装当前需要且经过原始/观测对照的探针；源码插桩与运行时 Hook 都可能影响行为，不按域名假定可用。
 
 ```
 Actions:
-  inject_hook_preset(preset="cookie", persistent=True)       # 原型链级 cookie hook
-  inject_hook_preset(preset="xhr", persistent=True)          # 请求出口
-  inject_hook_preset(preset="fetch", persistent=True)        # 请求出口
-  inject_hook_preset(preset="crypto", persistent=True)       # btoa/atob/JSON.stringify
-  hook_jsvmp_interpreter(script_url="<VMP basename>",        # 多路径运行时探针
-                         track_calls=True,
-                         track_reflect=True,
-                         track_props=True)
-  bypass_debugger_trap()                                      # 避免 VMP 的 debugger 陷阱
+  # 仅示意需要 XHR 出口证据时的选择；已有所需证据则跳过
+  inject_hook_preset(preset="xhr", persistent=True)
 ```
 
-### Step 6 — reload_with_hooks 让探针先于 VMP 生效
+### Step 6 — 重载以应用已注册的 route / 持久 Hook
 
 ```
 Actions:
-  reload_with_hooks(clear_log=True, wait_until="networkidle")
-  → 注意 final_status：
-    · 200   → 正常
-    · 412   → RS挑战页未过，需要等 challenge 完成
-    · 403   → Akamai 拦截，检查指纹或 UA
+  instrumentation(action="reload", clear_log=True, wait_until="load")
+  → 检查 final_status / redirect_chain、业务完成信号和运行时健康状态
+  → HTTP 200 仍需业务验证；403/412 不能单独确定厂商或失败原因
 
 特殊场景：若目标就是首屏挑战页（RS 412），用：
   navigate(
     url="https://target.com/",
-    pre_inject_hooks=["xhr", "fetch", "cookie", "jsvmp_probe"],
+    pre_inject_hooks=["xhr", "fetch", "cookie"],  # 只放本次已选择的探针
     via_blank=True,
     wait_until="networkidle"
   )
@@ -247,14 +227,17 @@ Actions:
   # 或
   evaluate_js(expression="document.querySelector('.nextPage').click()")
 
-  → VMP 会在这一步生成签名并发起请求
+  → 用业务信号或新请求记录确认签名/请求实际发生，点击返回不代表异步任务已完成
 ```
 
 ### Step 8 — 读日志，分析 hot_keys / hot_methods / hot_functions
 
+以下摘要仅示意返回格式，不是本轮测试结果，也不是 Step 4 过滤配置必然产生的内容。只选 `this.bytecode` 不会自动得到宿主环境属性分布。
+
 ```
 Actions (hot_keys — VMP 读取了哪些属性):
-  get_instrumentation_log(
+  instrumentation(
+    action="log",
     tag_filter="vmp1",
     type_filter="tap_get",
     limit=200
@@ -269,26 +252,28 @@ Actions (hot_keys — VMP 读取了哪些属性):
       "cookie": 43,
       ...
     }
-  → 这就是 VMP 参与签名哈希的完整环境指纹集
+  → 实际结果只表示所选位置捕获的读取分布；不能当作参与签名哈希的完整环境指纹集
 
 Actions (hot_methods — VMP 调用了哪些方法):
-  get_instrumentation_log(
+  instrumentation(
+    action="log",
     tag_filter="vmp1",
     type_filter="tap_method",
     limit=200
   )
   → summary.hot_methods:
     {
-      "Object.defineProperty": 45,
-      "Array.prototype.join": 38,
-      "String.prototype.charCodeAt": 30,
-      "CryptoJS.MD5": 12,
+      "function.defineProperty": 45,
+      "object.join": 38,
+      "string.charCodeAt": 30,
+      "object.MD5": 12,
       ...
     }
-  → 这告诉你算法是否用标准加密
+  → ObjectType 为 typeof；需结合源码和 I/O 确认是否为标准加密调用
 
 Actions (hot_functions — VMP 调用了哪些函数):
-  get_instrumentation_log(
+  instrumentation(
+    action="log",
     tag_filter="vmp1",
     type_filter="tap_call",
     limit=200
@@ -303,6 +288,10 @@ Actions (hot_functions — VMP 调用了哪些函数):
     }
 ```
 
+Step 4 的读取配置不会产生方法/函数事件。确需这两类证据时，停止对应 route，按当前源码调整过滤器并打开 `rewrite_calls=True`，再有意采样。不要为了获得所有摘要直接扩大到全文件。
+
+SDK 在 iframe 中时，上述 `log` 调用都需加相同的 Frame 选择器，例如 `frame_name="sdk"`（替换为实测名称）。查看返回的 `world`、`frame`、`execution_backend` 和 `warning`。`possibly_capped=True` 表示所选 Frame 的原始缓冲区可能达到 20,000 条上限；`truncated=True` 只表示过滤后记录超过本次 `limit`，摘要统计的是过滤后的已保存记录。增大 `limit` 不能补回未采集事件，缺失事件不能作否定证据。
+
 ---
 
 ## 4. 进阶技巧
@@ -310,51 +299,58 @@ Actions (hot_functions — VMP 调用了哪些函数):
 ### 4.1 多 VMP 场景（一次分析两个脚本）
 
 ```
-instrument_jsvmp_source(url_pattern="**/webmssdk.es5.js", mode="ast", tag="webmssdk")
-instrument_jsvmp_source(url_pattern="**/a_bogus.js",       mode="ast", tag="bogus")
+instrumentation(action="install", url_pattern="**/webmssdk.es5.js", mode="ast", tag="webmssdk",
+                rewrite_calls=False, filter_property_names=["userAgent"])
+instrumentation(action="install", url_pattern="**/a_bogus.js", mode="ast", tag="bogus",
+                rewrite_calls=False, filter_property_names=["userAgent"])
 
 # 分别看
-get_instrumentation_log(tag_filter="webmssdk", type_filter="tap_get")
-get_instrumentation_log(tag_filter="bogus",    type_filter="tap_get")
+instrumentation(action="log", tag_filter="webmssdk", type_filter="tap_get")
+instrumentation(action="log", tag_filter="bogus", type_filter="tap_get")
 ```
 
 ### 4.2 key_filter 锁定某个具体属性
 
 ```
-# 只看 VMP 读取 navigator.webdriver 的记录
-get_instrumentation_log(tag_filter="vmp1", key_filter="webdriver")
+# 按属性名过滤；仍需源码确认对象是 navigator
+instrumentation(action="log", tag_filter="vmp1", type_filter="tap_get", key_filter="webdriver")
 
-# 只看 VMP 调用 CryptoJS.MD5 的记录（method_name 过滤）
-get_instrumentation_log(tag_filter="vmp1", key_filter="MD5")
+# 按方法名过滤；MD5 名称本身不能证明来自 CryptoJS
+instrumentation(action="log", tag_filter="vmp1", type_filter="tap_method", key_filter="MD5")
 ```
+
+`key_filter` 是读取日志时对子串的匹配，覆盖 `key` / `method` / `name`，不会减少插桩或采集开销。安装阶段用 AST 的 `filter_property_names` 限制读取与方法调用，用 `filter_object_names` 选择 `this.bytecode` 等静态路径；两类过滤同时设置时目标需同时满足。过滤器不是对 preview 对象的运行时查询。
 
 ### 4.3 管理插桩 route
 
 ```
 # 查看所有激活的 route
-get_instrumentation_status()
+instrumentation(action="status")
 
 # 停止单个
-stop_instrumentation(url_pattern="**/sdenv-*.js")
+instrumentation(action="stop", url_pattern="**/sdenv-*.js")
 
 # 全部停止
-stop_instrumentation()
+instrumentation(action="stop")  # 仅在全部 route 都属于本任务且需清理时
 ```
+
+`stop` 移除 route，不还原当前文档中已执行的改写代码或卸载其他 Hook。恢复基线时保存证据，再按任务状态决定重载或创建新的自有上下文；其他 Hook 的卸载限制见当前 SKILL.md。
 
 ### 4.4 与 runtime_probe 互补
 
-runtime_probe 是低开销广谱探针，**不**改写源码，只 override 几个热点 API。源码级插桩改写 VMP 源码；runtime_probe 覆盖浏览器原生 API。两者叠加可以看到：
+runtime_probe 不改写源码，通过 JS 包装热点 API；它不是 Gecko 原生 trace，也不能保证低开销或不可检测。两者按需配合：
 
-- VMP 内部 `obj[key]` 调用 → `get_instrumentation_log`
+- VMP 内部被选中的 `obj[key]` 读取 → `instrumentation(action="log")`
 - VMP 最终落到 `XMLHttpRequest.open` / `canvas.toDataURL` / `navigator.userAgent` 的 getter 调用 → `get_runtime_probe_log`
 
 ```
 inject_hook_preset(preset="runtime_probe", persistent=True)
-instrument_jsvmp_source(url_pattern="**/sdenv-*.js", mode="ast", tag="vmp1")
-reload_with_hooks()
+instrumentation(action="install", url_pattern="**/sdenv-*.js", mode="ast", tag="vmp1",
+                rewrite_calls=False, filter_property_names=["userAgent"])
+instrumentation(action="reload")
 触发操作
 # 两路都读
-get_instrumentation_log(tag_filter="vmp1", limit=300)
+instrumentation(action="log", tag_filter="vmp1", limit=300)
 get_runtime_probe_log(type_filter="xhr_send", limit=100)
 get_runtime_probe_log(type_filter="canvas_toDataURL", limit=50)
 ```
@@ -366,59 +362,65 @@ get_runtime_probe_log(type_filter="canvas_toDataURL", limit=50)
 ### Q1：`files_rewritten=0`，没改写到
 
 **可能原因**：
+
 1. `url_pattern` 没命中——确认 VMP 实际 URL（`list_network_requests` 里看），glob 模式要用 `**/` 前缀才能匹配任意路径
-2. VMP 从缓存加载——强制 `reload_with_hooks(clear_log=True)` 或清浏览器缓存
-3. pattern 注册太晚——要在 `navigate` / `reload_with_hooks` **之前**调用 `instrument_jsvmp_source`
+2. 脚本已在安装前加载——确认加载时序，需要重新采样时用 `instrumentation(action="reload")`，不先清全部缓存
+3. route 命中但原文透传——查看 `files_seen`、`files_passed_through`、`last_skip_reason` 与 `last_error`，区分体积门槛、语法/过滤范围和非成功响应
 
 ### Q2：AST 模式报 `parse_error`
 
-**可能原因**：原始脚本包含 esprima-python 不支持的语法。
+**可能原因**：原始响应不是有效 JS、解析依赖缺失、现代解析资源限制，或两种解析器均不支持该语法。
 
 **对策**：
-- 降级为 `mode="regex"`（零依赖，不会 parse）
-- 或先 `save_script` 把脚本存本地，人工看看是不是有奇怪的语法，再考虑局部 patch
+
+- 核对 `last_error` / `last_parser_backend` 及本地 esprima、Node.js、随包 Acorn；保存原始响应检查内容和来源
+- 仅在整个输入符合 regex 白名单时考虑回退；复杂源码被跳过是明确的能力边界，不强制换模式或直接修补原文
 
 ### Q3：改写后页面崩溃
 
 **可能原因**：
-1. `files_rewritten > 0` 但 runtime 标记不存在——AST 改写产物可能因嵌套节点区间冲突而无法解析；停止 AST route 后降级 regex/transparent
-2. VMP 自己对源码做完整性校验——用 regex 模式做轻改写，只改 member access
-3. Tag 变量名冲突——改个 `tag` 再试
-4. 改写后代码过大——把 `max_rewrites` 调小
+
+1. 世界/Frame 或加载状态不对——先按健康检查核对，再看浏览器解析/执行错误与原始基线
+2. VMP 自己对源码做完整性校验——任何源码改动都可能触发，不能承诺 regex 或更少改写解决；停止对应 route，评估无需改源码的观测路径
+3. MCP 全局名称冲突或内建函数已被业务修改——检查运行时安装时序；`tag` 只是日志分组，换 tag 不会改 runtime 全局名称
+4. 改写开销或语义变化——缩小 AST 过滤范围、关闭不需要的调用改写并做对照；不要持续增加 `max_rewrites` 重试同一失败产物
 
 ### Q4：hot_keys 没出现预期的环境指纹
 
 **可能原因**：
-1. VMP 还没真正执行——加大 `wait_until="networkidle"`，或 `wait_for` 某个元素后再读日志
-2. 改写或执行没成功——先看 `files_rewritten`，再检查 `window.__mcp_tap_installed`
-3. tag 搞混了——检查 `tag_filter` 是否写对
+
+1. VMP 尚未触发——查看业务完成信号/请求记录，不把 networkidle 当作签名已完成
+2. 改写位置被跳过、过滤或尚未执行——核对目标响应、status 与主世界 runtime 标记
+3. Frame、tag/filter 不匹配，或日志达到容量——检查所选 Frame 和 `possibly_capped`；空结果不证明没有读取
 
 ### Q5：日志爆炸到上限 20000 条
 
 **对策**：
-- `get_instrumentation_log(..., clear=True)` 读完清
-- 收紧 `url_pattern`，只插桩必要的一个脚本
-- 第一次跑用 `limit=300`，看 top hot_keys 就够，不需要全部 entries
+
+- 先保存需要的证据；`instrumentation(action="log", ..., clear=True)` 清空所选 Frame 的整个源码日志缓冲区，包括不匹配本次过滤器的记录，不卸载探针
+- 收紧 `url_pattern` 和 AST 安装过滤器，关闭不需要的 `rewrite_calls`，按业务窗口有意采样
+- `limit=300` 可减少返回量，但不减少采集开销；保留 `possibly_capped` / `truncated`，不能宣称日志完整
 
 ---
 
 ## 6. 源码级插桩的还原决策
 
-拿到 `hot_keys` / `hot_methods` / `hot_functions` 三个摘要后，按下面的表格选策略：
+摘要只覆盖所选位置与已保存的事件，下表的数量是历史启发，不是固定判据。`hot_methods` 的 `typeof.method` 不能直接标识 CryptoJS 等库；先结合源码、I/O 和当前业务对照验证，再选择策略：
 
-| hot_methods 特征 | hot_keys 环境属性数 | cookie 来源（analyze_cookie_sources） | 策略 |
+| 结合源码/I/O 确认的调用特征 | hot_keys 环境属性数 | cookie 来源（analyze_cookie_sources） | 候选策略 |
 |-----------------|---------------------|--------------------------------------|------|
-| 包含 CryptoJS.MD5 / SubtleCrypto.digest / HMAC | 少（< 10） | 全部 js_document_cookie | 纯算法还原（crypto/hashlib） |
-| 包含 CryptoJS 但环境读取多 | 中（10-30） | 混合或 js_document_cookie | 提取 JS 签名函数 + vm/execjs 沙箱 |
-| 全是自定义 fn 名，无可识别加密 | 多（30+） | 任意 | 路径 B：jsdom 环境伪装（见 `jsdom-env-patches.md`） |
-| 全是自定义 fn 名 | 中-多 | 主要 http_set_cookie | 路径 B + 重点关注发 token 的 POST 接口 |
+| 已证实使用 CryptoJS.MD5 / SubtleCrypto.digest / HMAC | 少（< 10） | 全部 js_document_cookie | 核对输入与拼接后尝试纯算法还原（crypto/hashlib） |
+| 已证实使用 CryptoJS，且输入依赖环境 | 中（10-30） | 混合或 js_document_cookie | 提取 JS 签名函数 + vm/execjs 沙箱并验证 |
+| 自定义函数与 SDK 执行强绑定，难以隔离 | 多（30+） | 任意 | 评估路径 B：jsdom 环境复现（见 `jsdom-env-patches.md`） |
+| 自定义函数且有服务端初始化链路 | 中-多 | 主要 http_set_cookie | 先确认协议初始化；需要环境复现时再选路径 B |
 
 ---
 
 ## 7. 参考
 
-- `references/jsvmp-analysis.md`：四板斧方法论总纲
-- `references/jsdom-env-patches.md`：环境伪装补丁库（路径 B）
-- `references/mcp-cookbook.md` 场景 6：源码级插桩场景化操作
-- `cases/universal-vmp-source-instrumentation.md`：骨架案例模板
-- MCP 上游：https://github.com/WhiteNightShadow/camoufox-reverse-mcp（当前基线 v1.5.1）
+- [jsvmp-analysis.md](jsvmp-analysis.md)：历史分析线索，按当前工具 schema 核对
+- [jsdom-env-patches.md](jsdom-env-patches.md)：环境复现补丁库（路径 B）
+- [骨架案例](../cases/universal-vmp-source-instrumentation.md)：模板，需当前适用性验证
+- [真实上游本地案例](../references/real-source-cases.md)：VM/CFF/CryptoJS/FingerprintJS 的来源与证据边界
+- [准备与验证脚本说明](../scripts/real_cases/README.md)：按需执行，本地通过不等于商业站点验证
+- [MCP 上游](https://github.com/WhiteNightShadow/camoufox-reverse-mcp)（本指南对齐 v1.8.0）
