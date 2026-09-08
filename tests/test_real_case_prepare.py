@@ -55,7 +55,15 @@ class PreparationSecurityTests(unittest.TestCase):
         self.assertEqual((dest / "LICENSE").read_bytes(), b"Original license\n")
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["sha256"], hashlib.sha256(b"Original license\n").hexdigest())
-        self.assertEqual((dest / "LICENSE").stat().st_mode & 0o7777, 0o644)
+        mode = (dest / "LICENSE").stat().st_mode & 0o7777
+        if os.name == "nt":
+            # Windows chmod only controls the read-only flag; POSIX owner/group
+            # masks are not preserved. Still verify a writable regular file and
+            # that the archive's executable/special bits were not carried over.
+            self.assertTrue(mode & 0o200)
+            self.assertEqual(mode & 0o7111, 0)
+        else:
+            self.assertEqual(mode, 0o644)
 
     def test_malicious_archive_is_rejected_before_any_extraction(self):
         cases = [
